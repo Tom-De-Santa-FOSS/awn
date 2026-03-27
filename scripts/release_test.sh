@@ -85,15 +85,18 @@ echo "Test: do_release patch creates tag and calls gh release"
   cd "$TMPDIR"
   echo "0.0.0" > VERSION
 
-  # Mock git and gh — record calls
+  # Mock git, gh, go — record calls
   MOCK_LOG="$TMPDIR/mock_calls.log"
   > "$MOCK_LOG"
   mock_git() { echo "git $*" >> "$MOCK_LOG"; }
   mock_gh() { echo "gh $*" >> "$MOCK_LOG"; }
+  mock_go() { touch "$TMPDIR/dist/awn" "$TMPDIR/dist/awnd"; }
 
   source "$SCRIPT_DIR/release.sh" --source-only
   GIT_CMD=mock_git
   GH_CMD=mock_gh
+  GO_CMD=mock_go
+  DIST_DIR="$TMPDIR/dist"
 
   do_release patch
 
@@ -111,6 +114,7 @@ echo "Test: do_release rejects invalid bump type"
   source "$SCRIPT_DIR/release.sh" --source-only
   GIT_CMD=true
   GH_CMD=true
+  GO_CMD=true
 
   output="$(do_release foo 2>&1 || true)"
   assert_eq "error message" "Error: bump type must be patch, minor, or major" "$output"
@@ -121,11 +125,61 @@ echo "Test: do_release minor bumps minor version"
 (
   cd "$TMPDIR"
   echo "0.0.5" > VERSION
+  mkdir -p "$TMPDIR/dist2"
   source "$SCRIPT_DIR/release.sh" --source-only
   GIT_CMD=true
   GH_CMD=true
+  GO_CMD="mock_go_noop"
+  DIST_DIR="$TMPDIR/dist2"
+  mock_go_noop() { touch "$TMPDIR/dist2/awn" "$TMPDIR/dist2/awnd"; }
   do_release minor
   assert_eq "version is 0.1.0" "0.1.0" "$(cat VERSION)"
+)
+
+# Test 8: build_all creates tarballs for each platform
+echo "Test: build_all creates platform tarballs"
+(
+  cd "$TMPDIR"
+  echo "0.1.0" > VERSION
+  mkdir -p dist
+
+  # Mock go build to create fake binaries
+  mock_go() { touch "$TMPDIR/dist/awn" "$TMPDIR/dist/awnd"; }
+
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GO_CMD=mock_go
+
+  build_all "$TMPDIR/dist"
+
+  assert_file_exists "linux-amd64 tarball" "$TMPDIR/dist/awn-linux-amd64.tar.gz"
+  assert_file_exists "linux-arm64 tarball" "$TMPDIR/dist/awn-linux-arm64.tar.gz"
+  assert_file_exists "darwin-amd64 tarball" "$TMPDIR/dist/awn-darwin-amd64.tar.gz"
+  assert_file_exists "darwin-arm64 tarball" "$TMPDIR/dist/awn-darwin-arm64.tar.gz"
+)
+
+# Test 9: do_release uploads assets
+echo "Test: do_release uploads tarballs to release"
+(
+  cd "$TMPDIR"
+  echo "0.0.0" > VERSION
+  mkdir -p dist
+
+  MOCK_LOG="$TMPDIR/mock_calls2.log"
+  > "$MOCK_LOG"
+  mock_git() { echo "git $*" >> "$MOCK_LOG"; }
+  mock_gh() { echo "gh $*" >> "$MOCK_LOG"; }
+  mock_go() { touch "$TMPDIR/dist/awn" "$TMPDIR/dist/awnd"; }
+
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GIT_CMD=mock_git
+  GH_CMD=mock_gh
+  GO_CMD=mock_go
+  DIST_DIR="$TMPDIR/dist"
+
+  do_release patch
+
+  # Check that gh release upload was called
+  assert_eq "assets uploaded" "1" "$(grep -c 'gh release upload' "$MOCK_LOG" || echo 0)"
 )
 
 echo ""

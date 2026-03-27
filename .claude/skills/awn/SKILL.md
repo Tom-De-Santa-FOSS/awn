@@ -1,12 +1,10 @@
 ---
 name: awn
-description: "TUI automation for AI agents. Use when the user needs to interact with terminal applications programmatically — create sessions, take screenshots, send input, wait for text. Trigger on: 'terminal automation', 'TUI session', 'screenshot terminal', 'awn', 'awnd'."
-trigger: strategy
+description: "TUI automation for AI agents — manage headless terminal sessions, take screenshots, send input, and wait for output. Use when the user needs to interact with terminal applications programmatically, says /awn, or wants to automate a TUI. Also trigger on: 'terminal automation', 'TUI session', 'screenshot terminal', 'headless terminal', 'awnd', 'PTY session'."
+trigger: user-invocable
 ---
 
-# awn — TUI Automation for AI Agents
-
-Manage headless terminal sessions via JSON-RPC 2.0 over WebSocket.
+You are operating awn, a TUI automation daemon. Read `$ARGUMENTS` to understand what the user needs. Start the daemon if not running, then execute the requested operations.
 
 ## Quick Start
 
@@ -19,12 +17,26 @@ awn wait-for-text <id> "done"      # Wait for text to appear
 awn close <id>                      # End session
 ```
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `awn create <cmd> [args...]` | Start new PTY session |
+| `awn screenshot <id>` | Capture screen buffer |
+| `awn input <id> "<data>"` | Send keys/text to session |
+| `awn wait-for-text <id> "<text>"` | Block until text appears |
+| `awn wait-for-stable <id>` | Block until screen stops changing |
+| `awn close <id>` | Terminate session |
+| `awn list` | List active sessions |
+
 ## Environment Variables
 
 - `AWN_ADDR` — Daemon address (default: `ws://localhost:7600`)
 - `AWN_TOKEN` — Bearer token for authentication (optional)
 
 ## RPC Methods
+
+JSON-RPC 2.0 over WebSocket at `ws://localhost:7600`.
 
 | Method | Params | Returns |
 |--------|--------|---------|
@@ -36,9 +48,17 @@ awn close <id>                      # End session
 | `close` | `{id}` | `null` |
 | `list` | none | `{sessions: [id...]}` |
 
+## Workflow
+
+1. **Start daemon** — `awnd &` (binds to `127.0.0.1:7600`, localhost only)
+2. **Create session** — `awn create bash` returns a session `{id}`
+3. **Interact** — Send input, take screenshots, wait for output
+4. **Clean up** — `awn close <id>` when done
+
 ## When to Use
 
 - Automating interactive terminal applications (htop, vim, ncurses)
 - Taking screenshots of terminal state for AI agent vision
 - Sending keystrokes to running TUI programs
 - Waiting for specific output before proceeding
+- Running headless terminal sessions for CI or testing

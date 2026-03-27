@@ -94,16 +94,22 @@ echo "Test: do_install flow with mocked curl and tar"
   assert_eq "awn is executable" "1" "$([ -x "$TMPDIR/testbin/awn" ] && echo 1 || echo 0)"
 )
 
-# Test 6: install_skill creates the skill file
-echo "Test: install_skill creates Claude Code skill"
+# Test 6: install_skill downloads SKILL.md to target dir
+echo "Test: install_skill downloads SKILL.md"
 (
   cd "$TMPDIR"
   SKILL_DIR="$TMPDIR/fakeskills/awn"
+  MOCK_LOG="$TMPDIR/skill_curl.log"
+  > "$MOCK_LOG"
+
+  mock_curl() { echo "curl $*" >> "$MOCK_LOG"; echo "# skill content" > "$2"; }
 
   source "$SCRIPT_DIR/../install.sh" --source-only
+  CURL_CMD=mock_curl
   install_skill "$SKILL_DIR"
 
-  assert_eq "skill file exists" "1" "$([ -f "$SKILL_DIR/awn.md" ] && echo 1 || echo 0)"
+  assert_eq "SKILL.md exists" "1" "$([ -f "$SKILL_DIR/SKILL.md" ] && echo 1 || echo 0)"
+  assert_eq "downloads from repo" "1" "$(grep -c 'raw.githubusercontent.com/Tom-De-Santa-FOSS/awn/master/.claude/skills/awn/SKILL.md' "$MOCK_LOG" || echo 0)"
 )
 
 # Test 7: get_latest_version fetches version from GitHub API

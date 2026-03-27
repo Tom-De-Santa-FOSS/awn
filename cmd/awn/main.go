@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -50,7 +51,9 @@ func main() {
 			var snap struct {
 				Lines []string `json:"lines"`
 			}
-			json.Unmarshal([]byte(result), &snap)
+			if err := json.Unmarshal([]byte(result), &snap); err != nil {
+				fatal("parse screenshot: " + err.Error())
+			}
 			fmt.Println(strings.Join(snap.Lines, "\n"))
 		}
 
@@ -93,7 +96,12 @@ func main() {
 }
 
 func call(addr, method string, params any) string {
-	conn, _, err := websocket.DefaultDialer.Dial(addr, nil)
+	header := http.Header{}
+	if token := os.Getenv("AWN_TOKEN"); token != "" {
+		header.Set("Authorization", "Bearer "+token)
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(addr, header)
 	if err != nil {
 		fatal("connect to daemon: " + err.Error())
 	}
@@ -108,7 +116,10 @@ func call(addr, method string, params any) string {
 		req["params"] = params
 	}
 
-	data, _ := json.Marshal(req)
+	data, err := json.Marshal(req)
+	if err != nil {
+		fatal("marshal request: " + err.Error())
+	}
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		fatal("send: " + err.Error())
 	}
@@ -125,7 +136,9 @@ func call(addr, method string, params any) string {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	json.Unmarshal(msg, &resp)
+	if err := json.Unmarshal(msg, &resp); err != nil {
+		fatal("parse response: " + err.Error())
+	}
 
 	if resp.Error != nil {
 		fatal(resp.Error.Message)
@@ -146,7 +159,8 @@ Commands:
   awn list                           List active sessions
 
 Environment:
-  AWN_ADDR    Daemon address (default: ws://localhost:7600)`)
+  AWN_ADDR    Daemon address (default: ws://localhost:7600)
+  AWN_TOKEN   Bearer token for authentication`)
 }
 
 func fatal(msg string) {

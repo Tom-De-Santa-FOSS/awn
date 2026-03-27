@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -67,7 +68,9 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if s.token != "" {
-		if r.Header.Get("Authorization") != "Bearer "+s.token {
+		got := []byte(r.Header.Get("Authorization"))
+		want := []byte("Bearer " + s.token)
+		if subtle.ConstantTimeCompare(got, want) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

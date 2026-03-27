@@ -84,6 +84,13 @@ func main() {
 		call(addr, "close", map[string]any{"id": os.Args[2]})
 		fmt.Println("ok")
 
+	case "detect":
+		if len(os.Args) < 3 {
+			fatal("usage: awn detect <session-id>")
+		}
+		result := call(addr, "detect", map[string]any{"id": os.Args[2]})
+		fmt.Println(result)
+
 	case "list":
 		result := call(addr, "list", nil)
 		fmt.Println(result)
@@ -153,6 +160,7 @@ func usage() {
 Commands:
   awn create <command> [args...]     Start a TUI session
   awn screenshot <id> [--json]       Capture screen state
+  awn detect <id>                    Detect UI elements (accessibility tree)
   awn input <id> <text|keys>         Send input to session
   awn wait <id> <text>               Wait for text to appear
   awn close <id>                     Terminate session

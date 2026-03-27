@@ -175,6 +175,42 @@ func runesContains(haystack, needle []rune) bool {
 	return false
 }
 
+// Screen returns a snapshot of the current terminal display.
+func (s *Session) Screen() *Screen {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	s.term.Lock()
+	defer s.term.Unlock()
+
+	cols, rows := s.term.Size()
+	cells := make([][]Cell, rows)
+	for row := 0; row < rows; row++ {
+		cells[row] = make([]Cell, cols)
+		for col := 0; col < cols; col++ {
+			c := s.term.Cell(col, row)
+			cells[row][col] = Cell{
+				Char:  c.Char,
+				FG:    Color(c.FG),
+				BG:    Color(c.BG),
+				Attrs: Attr(c.Mode),
+			}
+		}
+	}
+	cur := s.term.Cursor()
+	return &Screen{
+		Rows:   rows,
+		Cols:   cols,
+		Cells:  cells,
+		Cursor: Position{Row: cur.Y, Col: cur.X},
+	}
+}
+
+// FindAll runs the given strategy against the current screen and returns all detected elements.
+func (s *Session) FindAll(strategy Strategy) []Element {
+	return strategy.Detect(s.Screen())
+}
+
 // SendKeys writes input to the session's PTY.
 func (s *Session) SendKeys(data string) error {
 	_, err := s.ptmx.WriteString(data)

@@ -125,3 +125,39 @@ func TestSession_Close_RemovesFromDriver(t *testing.T) {
 		t.Fatal("expected 0 sessions after close")
 	}
 }
+
+// mockStrategy is a test double that returns a fixed set of elements.
+type mockStrategy struct {
+	elements []Element
+}
+
+func (m *mockStrategy) Detect(screen *Screen) []Element {
+	return m.elements
+}
+
+func TestSession_FindAll_ReturnsMockElements(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	want := []Element{
+		{Type: "button", Label: "OK"},
+		{Type: "button", Label: "Cancel"},
+	}
+	strategy := &mockStrategy{elements: want}
+
+	got := s.FindAll(strategy)
+	if len(got) != len(want) {
+		t.Fatalf("FindAll returned %d elements, want %d", len(got), len(want))
+	}
+	for i, e := range got {
+		if e != want[i] {
+			t.Errorf("element[%d] = %v, want %v", i, e, want[i])
+		}
+	}
+}

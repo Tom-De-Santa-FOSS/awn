@@ -1,4 +1,4 @@
-.PHONY: build daemon cli clean test
+.PHONY: build daemon cli clean test test-scripts test-all
 
 build: daemon cli
 
@@ -16,6 +16,12 @@ run: daemon
 
 test:
 	go test ./... -v -race
+
+test-scripts:
+	bash scripts/release_test.sh
+	bash scripts/install_test.sh
+
+test-all: test test-scripts
 
 install: build
 	cp bin/awn bin/awnd $(GOPATH)/bin/ 2>/dev/null || cp bin/awn bin/awnd ~/.local/bin/

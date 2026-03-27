@@ -83,6 +83,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("client connected: %s", conn.RemoteAddr())
 
 	var wmu sync.Mutex // protects conn.WriteMessage
+	var wg sync.WaitGroup
+
+	defer wg.Wait() // wait for in-flight handlers before conn.Close
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -106,7 +109,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		wg.Add(1)
 		go func(req JSONRPCRequest) {
+			defer wg.Done()
+
 			result, err := s.handler.Dispatch(req.Method, req.Params)
 
 			wmu.Lock()

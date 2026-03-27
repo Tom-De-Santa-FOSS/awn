@@ -140,8 +140,7 @@ func (m *Manager) ContainsText(id string, text string) (bool, error) {
 	defer sess.term.Unlock()
 
 	cols, rows := sess.term.Size()
-	needle := []rune(text)
-	if len(needle) == 0 {
+	if len(text) == 0 {
 		return true, nil
 	}
 
@@ -255,8 +254,10 @@ func (m *Manager) Close(id string) error {
 	sess.once.Do(func() {
 		close(sess.done)
 	})
+	// Reap the child process. Ignore errors since Kill+ptmx.Close may have
+	// already caused it to be reaped by readLoop.
 	if sess.Cmd.Process != nil {
-		sess.Cmd.Process.Wait()
+		sess.Cmd.Process.Wait() //nolint:errcheck
 	}
 	return nil
 }

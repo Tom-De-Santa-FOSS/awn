@@ -135,6 +135,28 @@ func TestSession_Screen_ReturnsCorrectDimensions(t *testing.T) {
 	}
 }
 
+func TestSession_Screen_CapturesCharacterContent(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer s.Close()
+
+	_, _ = p.W.WriteString("hi")
+	time.Sleep(20 * time.Millisecond)
+
+	scr := s.Screen()
+	if scr.Cells[0][0].Char != 'h' {
+		t.Errorf("Cells[0][0].Char = %q, want 'h'", scr.Cells[0][0].Char)
+	}
+	if scr.Cells[0][1].Char != 'i' {
+		t.Errorf("Cells[0][1].Char = %q, want 'i'", scr.Cells[0][1].Char)
+	}
+}
+
 func TestSession_Screen_CapturesReverseAttr(t *testing.T) {
 	p := &pipePTY{}
 	d := NewDriver(WithPTY(p))

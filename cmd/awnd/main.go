@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/tom/awn"
 	"github.com/tom/awn/internal/rpc"
-	"github.com/tom/awn/internal/session"
 	"github.com/tom/awn/internal/transport"
 )
 
@@ -18,17 +18,16 @@ func main() {
 
 	token := os.Getenv("AWN_TOKEN")
 
-	mgr := session.NewManager()
-	handler := rpc.NewHandler(mgr)
+	driver := awn.NewDriver()
+	handler := rpc.NewHandler(driver)
 	server := transport.NewServer(handler, *addr, token)
 
-	// Graceful shutdown: close all sessions before exiting
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
 		log.Println("shutting down...")
-		mgr.CloseAll()
+		driver.CloseAll()
 		os.Exit(0)
 	}()
 

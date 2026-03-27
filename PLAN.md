@@ -4,16 +4,16 @@
 Restructure awn from an internal daemon into a public Go package with a Selenium WebDriver-like API: Driver manages sessions, Sessions control terminal apps, pluggable Strategies detect UI elements. awtree becomes one strategy implementation. Daemon/CLI become thin consumers.
 
 ## Phases
-- [ ] Phase 1: Design — nail down public API types and package layout
-- [ ] Phase 2: Promote core — move session/screen from internal/ to root package as public API
-- [ ] Phase 3: Styled screen — extend Screen to capture full cell styling (FG, BG, attrs) from vt10x
-- [ ] Phase 4: Strategy interface — define Strategy + Element types, add FindAll/FindOne to Session
-- [ ] Phase 5: awtree adapter — sub-package `awn/awtree` that bridges awn.Screen → awtree.Grid → Strategy
+- [x] Phase 1: Design — nail down public API types and package layout
+- [x] Phase 2: Promote core — move session/screen from internal/ to root package as public API
+- [x] Phase 3: Styled screen — extend Screen to capture full cell styling (FG, BG, attrs) from vt10x
+- [x] Phase 4: Strategy interface — define Strategy + Element types, add FindAll/FindOne to Session
+- [x] Phase 5: awtree adapter — sub-package `awn/awtree` that bridges awn.Screen → awtree.Grid → Strategy
 - [ ] Phase 6: Wire daemon — rewrite cmd/awnd and cmd/awn to use public API, add `detect` RPC method
 - [ ] Phase 7: Test with lazygit — end-to-end test spawning lazygit, detecting elements
 
 ## Current Phase
-Phase 1 — Design
+Phase 6 — Wire daemon to use public API
 
 ## Findings
 

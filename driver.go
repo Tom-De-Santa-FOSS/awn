@@ -101,6 +101,13 @@ func (d *Driver) List() []string {
 	return ids
 }
 
+// Get returns a session by ID, or nil if not found.
+func (d *Driver) Get(id string) *Session {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.sessions[id]
+}
+
 // Close terminates a session by ID.
 func (d *Driver) Close(id string) error {
 	d.mu.Lock()

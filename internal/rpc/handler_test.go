@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tom/awn/internal/session"
+	"github.com/tom/awn"
 )
 
 func TestDispatch_UnknownMethod(t *testing.T) {
-	mgr := session.NewManager()
-	h := NewHandler(mgr)
+	d := awn.NewDriver()
+	h := NewHandler(d)
 	_, err := h.Dispatch("bogus", nil)
 	if err == nil || !strings.Contains(err.Error(), "method not found") {
 		t.Fatalf("expected method not found error, got: %v", err)
@@ -18,9 +18,8 @@ func TestDispatch_UnknownMethod(t *testing.T) {
 }
 
 func TestDispatch_InvalidParams(t *testing.T) {
-	mgr := session.NewManager()
-	h := NewHandler(mgr)
-	// Pass a raw string (not a JSON object) as params for the create method.
+	d := awn.NewDriver()
+	h := NewHandler(d)
 	_, err := h.Dispatch("create", json.RawMessage(`"not json"`))
 	if err == nil || !strings.Contains(err.Error(), "invalid params") {
 		t.Fatalf("expected invalid params error, got: %v", err)
@@ -28,8 +27,8 @@ func TestDispatch_InvalidParams(t *testing.T) {
 }
 
 func TestDispatch_List(t *testing.T) {
-	mgr := session.NewManager()
-	h := NewHandler(mgr)
+	d := awn.NewDriver()
+	h := NewHandler(d)
 	result, err := h.Dispatch("list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -47,9 +46,18 @@ func TestDispatch_List(t *testing.T) {
 }
 
 func TestDispatch_ScreenshotNotFound(t *testing.T) {
-	mgr := session.NewManager()
-	h := NewHandler(mgr)
+	d := awn.NewDriver()
+	h := NewHandler(d)
 	_, err := h.Dispatch("screenshot", json.RawMessage(`{"id":"nonexistent"}`))
+	if err == nil {
+		t.Fatalf("expected error for nonexistent session, got nil")
+	}
+}
+
+func TestDispatch_DetectNotFound(t *testing.T) {
+	d := awn.NewDriver()
+	h := NewHandler(d)
+	_, err := h.Dispatch("detect", json.RawMessage(`{"id":"nonexistent"}`))
 	if err == nil {
 		t.Fatalf("expected error for nonexistent session, got nil")
 	}

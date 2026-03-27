@@ -65,6 +65,58 @@ echo "Test: default install directory"
   assert_eq "default install dir" "$HOME/.local/bin" "$INSTALL_DIR"
 )
 
+# Test 5: do_install downloads, extracts, and places binaries
+echo "Test: do_install flow with mocked curl and tar"
+(
+  cd "$TMPDIR"
+  MOCK_LOG="$TMPDIR/mock_calls.log"
+  > "$MOCK_LOG"
+
+  # Create fake tarball with fake binaries
+  mkdir -p "$TMPDIR/fakebuild"
+  echo "#!/bin/sh" > "$TMPDIR/fakebuild/awn"
+  echo "#!/bin/sh" > "$TMPDIR/fakebuild/awnd"
+  chmod +x "$TMPDIR/fakebuild/awn" "$TMPDIR/fakebuild/awnd"
+  tar czf "$TMPDIR/fake.tar.gz" -C "$TMPDIR/fakebuild" awn awnd
+
+  # Mock curl to copy our fake tarball
+  mock_curl() { echo "curl $*" >> "$MOCK_LOG"; cp "$TMPDIR/fake.tar.gz" "$2"; }
+
+  source "$SCRIPT_DIR/install.sh" --source-only
+  CURL_CMD=mock_curl
+  INSTALL_DIR="$TMPDIR/testbin"
+  VERSION="0.1.0"
+
+  do_install "linux" "amd64"
+
+  assert_eq "awn binary installed" "1" "$([ -f "$TMPDIR/testbin/awn" ] && echo 1 || echo 0)"
+  assert_eq "awnd binary installed" "1" "$([ -f "$TMPDIR/testbin/awnd" ] && echo 1 || echo 0)"
+  assert_eq "awn is executable" "1" "$([ -x "$TMPDIR/testbin/awn" ] && echo 1 || echo 0)"
+)
+
+# Test 6: install_skill creates the skill file
+echo "Test: install_skill creates Claude Code skill"
+(
+  cd "$TMPDIR"
+  SKILL_DIR="$TMPDIR/fakeskills/awn"
+
+  source "$SCRIPT_DIR/install.sh" --source-only
+  install_skill "$SKILL_DIR"
+
+  assert_eq "skill file exists" "1" "$([ -f "$SKILL_DIR/awn.md" ] && echo 1 || echo 0)"
+)
+
+# Test 7: get_latest_version fetches version from GitHub API
+echo "Test: get_latest_version parses tag from GitHub API"
+(
+  source "$SCRIPT_DIR/install.sh" --source-only
+  mock_curl() { echo '{"tag_name": "v0.2.0"}'; }
+  CURL_CMD=mock_curl
+
+  ver="$(get_latest_version)"
+  assert_eq "latest version parsed" "0.2.0" "$ver"
+)
+
 echo ""
 read -r pass fail < "$RESULTS_FILE"
 echo "Results: $pass passed, $fail failed"

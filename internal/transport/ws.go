@@ -84,6 +84,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var wmu sync.Mutex // protects conn.WriteMessage
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 64) // cap in-flight dispatches per connection
 
 	defer wg.Wait() // wait for in-flight handlers before conn.Close
 
@@ -109,9 +110,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		sem <- struct{}{} // backpressure: block if 64 handlers in-flight
 		wg.Add(1)
 		go func(req JSONRPCRequest) {
 			defer wg.Done()
+			defer func() { <-sem }()
 
 			result, err := s.handler.Dispatch(req.Method, req.Params)
 

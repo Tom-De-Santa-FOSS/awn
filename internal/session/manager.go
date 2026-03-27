@@ -144,13 +144,23 @@ func (m *Manager) ContainsText(id string, text string) (bool, error) {
 		return true, nil
 	}
 
-	line := make([]rune, cols)
+	needle := []rune(text)
+	line := make([]rune, 0, cols)
 	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
-			line[col] = sess.term.Cell(col, row).Char
+		line = line[:0]
+		end := cols
+		// Find last non-blank cell to avoid scanning trailing whitespace.
+		for end > 0 {
+			ch := sess.term.Cell(end-1, row).Char
+			if ch != ' ' && ch != 0 {
+				break
+			}
+			end--
 		}
-		trimmed := strings.TrimRight(string(line), " \x00")
-		if strings.Contains(trimmed, text) {
+		for col := 0; col < end; col++ {
+			line = append(line, sess.term.Cell(col, row).Char)
+		}
+		if runesContains(line, needle) {
 			return true, nil
 		}
 	}
@@ -279,6 +289,24 @@ func (m *Manager) List() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// runesContains reports whether needle is a sub-slice of haystack.
+func runesContains(haystack, needle []rune) bool {
+	nl := len(needle)
+	for i := 0; i <= len(haystack)-nl; i++ {
+		match := true
+		for j := 0; j < nl; j++ {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 // linesEqual compares two string slices element-by-element.

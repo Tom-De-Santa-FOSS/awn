@@ -41,28 +41,48 @@ func TestDefaultConstants(t *testing.T) {
 	}
 }
 
-// TestMakeBuffer_CorrectDimensions verifies makeBuffer produces the right shape.
-func TestMakeBuffer_CorrectDimensions(t *testing.T) {
-	rows, cols := 5, 10
-	buf := makeBuffer(rows, cols)
-	if len(buf) != rows {
-		t.Fatalf("got %d rows, want %d", len(buf), rows)
+// TestNewSession_CorrectDimensions verifies a new session screenshot has the right shape.
+func TestNewSession_CorrectDimensions(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 10})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	for i, row := range buf {
-		if len(row) != cols {
-			t.Fatalf("row %d: got %d cols, want %d", i, len(row), cols)
-		}
+
+	snap, err := m.Screenshot(id)
+	if err != nil {
+		t.Fatalf("Screenshot: %v", err)
+	}
+	if snap.Rows != 5 {
+		t.Errorf("got %d rows, want 5", snap.Rows)
+	}
+	if snap.Cols != 10 {
+		t.Errorf("got %d cols, want 10", snap.Cols)
+	}
+	if len(snap.Lines) != 5 {
+		t.Errorf("got %d lines, want 5", len(snap.Lines))
 	}
 }
 
-// TestMakeBuffer_AllSpaces verifies every cell starts as a space.
-func TestMakeBuffer_AllSpaces(t *testing.T) {
-	buf := makeBuffer(3, 4)
-	for r, row := range buf {
-		for c, ch := range row {
-			if ch != ' ' {
-				t.Errorf("buf[%d][%d] = %q, want ' '", r, c, ch)
-			}
+// TestNewSession_EmptyScreen verifies a fresh session screenshot has empty lines.
+func TestNewSession_EmptyScreen(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 3, Cols: 4})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	snap, err := m.Screenshot(id)
+	if err != nil {
+		t.Fatalf("Screenshot: %v", err)
+	}
+	for i, line := range snap.Lines {
+		if line != "" {
+			t.Errorf("line %d = %q, want empty", i, line)
 		}
 	}
 }
@@ -181,4 +201,173 @@ func TestWaitForText_Timeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "timeout") {
 		t.Errorf("error should mention timeout, got: %v", err)
 	}
+}
+
+// TestANSI_CursorMovement verifies that ANSI cursor-move escape sequences
+// position text correctly instead of appearing as raw escape codes.
+func TestANSI_CursorMovement(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// ESC[3;5H moves cursor to row 3, col 5 (1-based), then write "XY"
+	_, err = io.WriteString(p.W, "\x1b[3;5HXY")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		// Row 2 (0-based) should contain "XY" starting at col 4 (0-based)
+		if len(snap.Lines) > 2 && strings.Contains(snap.Lines[2], "XY") {
+			// Verify no raw escape codes appear anywhere
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "\x1b") {
+					t.Fatalf("raw escape code found in screenshot: %q", line)
+				}
+			}
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'XY' at row 2 from ANSI cursor move")
+}
+
+// TestANSI_CursorPositionTracking verifies that cursor position in the
+// screenshot reflects ANSI cursor positioning commands.
+func TestANSI_CursorPositionTracking(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 10, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Move cursor to row 5, col 8 (1-based) then write "Z"
+	// After writing "Z", cursor should be at row 5, col 9 (1-based) = row 4, col 8 (0-based)
+	_, err = io.WriteString(p.W, "\x1b[5;8HZ")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		if len(snap.Lines) > 4 && strings.Contains(snap.Lines[4], "Z") {
+			// Cursor should be at (row=4, col=8) 0-based after writing "Z"
+			if snap.Cursor.Row != 4 {
+				t.Errorf("cursor row = %d, want 4", snap.Cursor.Row)
+			}
+			if snap.Cursor.Col != 8 {
+				t.Errorf("cursor col = %d, want 8", snap.Cursor.Col)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'Z' at row 4 from ANSI cursor positioning")
+}
+
+// TestANSI_AlternateScreenBuffer verifies that switching to the alternate
+// screen buffer and writing content is captured correctly in screenshots.
+func TestANSI_AlternateScreenBuffer(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write "MAIN" on main screen
+	_, err = io.WriteString(p.W, "MAIN")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Wait for "MAIN" to appear
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, _ := m.Screenshot(id)
+		if strings.Contains(snap.Lines[0], "MAIN") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Switch to alternate screen buffer (ESC[?1049h) and write "ALT"
+	_, err = io.WriteString(p.W, "\x1b[?1049h\x1b[1;1HALT")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		if strings.Contains(snap.Lines[0], "ALT") {
+			// "MAIN" should NOT be visible on the alternate screen
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "MAIN") {
+					t.Fatal("MAIN should not be visible on alternate screen")
+				}
+			}
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'ALT' on alternate screen buffer")
+}
+
+// TestANSI_ScrollUp verifies that writing more lines than the screen height
+// causes the screen to scroll, pushing earlier content up and off-screen.
+func TestANSI_ScrollUp(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	rows := 3
+	id, err := m.Create(Config{Command: "true", Rows: rows, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write 5 lines to a 3-row terminal — first 2 lines should scroll off
+	_, err = io.WriteString(p.W, "AAA\r\nBBB\r\nCCC\r\nDDD\r\nEEE")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		// After scrolling, last line should have "EEE"
+		if strings.Contains(snap.Lines[rows-1], "EEE") {
+			// "AAA" should have scrolled off
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "AAA") {
+					t.Fatal("AAA should have scrolled off screen")
+				}
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'EEE' on last line after scrolling")
 }

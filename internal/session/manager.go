@@ -10,6 +10,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
+	"github.com/hinshun/vt10x"
 	"github.com/tom/awn/internal/screen"
 )
 
@@ -67,9 +68,7 @@ func (m *Manager) Create(cfg Config) (string, error) {
 		ID:      id,
 		Cmd:     cmd,
 		ptmx:    ptmx,
-		rows:    cfg.Rows,
-		cols:    cfg.Cols,
-		buf:     makeBuffer(cfg.Rows, cfg.Cols),
+		term:    vt10x.New(vt10x.WithSize(cfg.Cols, cfg.Rows)),
 		done:    make(chan struct{}),
 		updated: make(chan struct{}, 1),
 		created: time.Now(),
@@ -95,15 +94,24 @@ func (m *Manager) Screenshot(id string) (*screen.Snapshot, error) {
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 
+	sess.term.Lock()
+	defer sess.term.Unlock()
+
+	cols, rows := sess.term.Size()
+	cursor := sess.term.Cursor()
 	snap := &screen.Snapshot{
-		Rows:   sess.rows,
-		Cols:   sess.cols,
-		Lines:  make([]string, sess.rows),
-		Cursor: screen.Position{Row: sess.curRow, Col: sess.curCol},
+		Rows:   rows,
+		Cols:   cols,
+		Lines:  make([]string, rows),
+		Cursor: screen.Position{Row: cursor.Y, Col: cursor.X},
 	}
 
-	for i, row := range sess.buf {
-		snap.Lines[i] = strings.TrimRight(string(row), " \x00")
+	line := make([]rune, cols)
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			line[col] = sess.term.Cell(col, row).Char
+		}
+		snap.Lines[row] = strings.TrimRight(string(line), " \x00")
 	}
 
 	return snap, nil
@@ -236,9 +244,7 @@ func (m *Manager) get(id string) (*Session, error) {
 	return sess, nil
 }
 
-// readLoop reads PTY output and updates the screen buffer.
-// This is a simplified line-based parser. For full VT100 emulation,
-// swap in bubbleterm or go-vte.
+// readLoop reads PTY output and feeds it to the vt10x terminal emulator.
 func (s *Session) readLoop() {
 	defer s.wg.Done()
 
@@ -250,47 +256,8 @@ func (s *Session) readLoop() {
 			return
 		}
 
-		// Copy current buffer state into a local working copy.
-		s.mu.RLock()
-		localBuf := make([][]rune, s.rows)
-		for i, r := range s.buf {
-			localBuf[i] = make([]rune, len(r))
-			copy(localBuf[i], r)
-		}
-		rows := s.rows
-		cols := s.cols
-		row := s.curRow
-		col := s.curCol
-		s.mu.RUnlock()
-
-		for _, b := range buf[:n] {
-			switch b {
-			case '\n':
-				row++
-				col = 0
-				if row >= rows {
-					// Scroll up
-					copy(localBuf, localBuf[1:])
-					localBuf[rows-1] = make([]rune, cols)
-					for j := range localBuf[rows-1] {
-						localBuf[rows-1][j] = ' '
-					}
-					row = rows - 1
-				}
-			case '\r':
-				col = 0
-			default:
-				if row < rows && col < cols {
-					localBuf[row][col] = rune(b)
-					col++
-				}
-			}
-		}
-
 		s.mu.Lock()
-		s.buf = localBuf
-		s.curRow = row
-		s.curCol = col
+		s.term.Write(buf[:n])
 		s.mu.Unlock()
 
 		// Non-blocking notify
@@ -301,13 +268,3 @@ func (s *Session) readLoop() {
 	}
 }
 
-func makeBuffer(rows, cols int) [][]rune {
-	buf := make([][]rune, rows)
-	for i := range buf {
-		buf[i] = make([]rune, cols)
-		for j := range buf[i] {
-			buf[i][j] = ' '
-		}
-	}
-	return buf
-}

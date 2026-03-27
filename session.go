@@ -191,9 +191,9 @@ func (s *Session) Screen() *Screen {
 			c := s.term.Cell(col, row)
 			cells[row][col] = Cell{
 				Char:  c.Char,
-				FG:    Color(c.FG),
-				BG:    Color(c.BG),
-				Attrs: Attr(c.Mode),
+				FG:    mapColor(c.FG),
+				BG:    mapColor(c.BG),
+				Attrs: mapAttrs(c.Mode),
 			}
 		}
 	}
@@ -209,6 +209,54 @@ func (s *Session) Screen() *Screen {
 // FindAll runs the given strategy against the current screen and returns all detected elements.
 func (s *Session) FindAll(strategy Strategy) []Element {
 	return strategy.Detect(s.Screen())
+}
+
+// FindOne returns the first element matching the given function, or an error if none match.
+func (s *Session) FindOne(strategy Strategy, match MatchFunc) (Element, error) {
+	for _, el := range s.FindAll(strategy) {
+		if match(el) {
+			return el, nil
+		}
+	}
+	return Element{}, fmt.Errorf("no matching element found")
+}
+
+// vt10x default colors: DefaultFG = 1<<24 (0x1000000), DefaultBG = 1<<24+1 (0x1000001)
+const (
+	vt10xDefaultFG = 1 << 24
+	vt10xDefaultBG = 1<<24 + 1
+)
+
+// mapColor converts a vt10x color to awn Color.
+func mapColor(c vt10x.Color) Color {
+	v := uint32(c)
+	if v == vt10xDefaultFG || v == vt10xDefaultBG {
+		return DefaultColor
+	}
+	return Color(int32(v))
+}
+
+// vt10x Mode bit positions (from vt10x source, unexported):
+// reverse=0, underline=1, bold=2, gfx=3, italic=4, blink=5, wrap=6
+func mapAttrs(mode int16) Attr {
+	var a Attr
+	if mode&(1<<0) != 0 {
+		a |= AttrReverse
+	}
+	if mode&(1<<1) != 0 {
+		a |= AttrUnderline
+	}
+	if mode&(1<<2) != 0 {
+		a |= AttrBold
+	}
+	// bit 3 = gfx, skip
+	if mode&(1<<4) != 0 {
+		a |= AttrItalic
+	}
+	if mode&(1<<5) != 0 {
+		a |= AttrBlink
+	}
+	return a
 }
 
 // SendKeys writes input to the session's PTY.

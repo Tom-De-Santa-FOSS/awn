@@ -108,6 +108,33 @@ func TestSession_WaitForText_Timeout(t *testing.T) {
 	}
 }
 
+func TestSession_Screen_ReturnsCorrectDimensions(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer s.Close()
+
+	screen := s.Screen()
+	if screen.Rows != DefaultRows {
+		t.Fatalf("Screen().Rows = %d, want %d", screen.Rows, DefaultRows)
+	}
+	if screen.Cols != DefaultCols {
+		t.Fatalf("Screen().Cols = %d, want %d", screen.Cols, DefaultCols)
+	}
+	if len(screen.Cells) != screen.Rows {
+		t.Fatalf("len(Cells) = %d, want %d", len(screen.Cells), screen.Rows)
+	}
+	for i, row := range screen.Cells {
+		if len(row) != screen.Cols {
+			t.Fatalf("len(Cells[%d]) = %d, want %d", i, len(row), screen.Cols)
+		}
+	}
+}
+
 func TestSession_Close_RemovesFromDriver(t *testing.T) {
 	p := &pipePTY{}
 	d := NewDriver(WithPTY(p))
@@ -159,5 +186,30 @@ func TestSession_FindAll_ReturnsMockElements(t *testing.T) {
 		if e != want[i] {
 			t.Errorf("element[%d] = %v, want %v", i, e, want[i])
 		}
+	}
+}
+
+func TestSession_FindOne_ReturnsFirstMatchingElement(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	elements := []Element{
+		{Type: "button", Label: "OK"},
+		{Type: "button", Label: "Cancel"},
+	}
+	strategy := &mockStrategy{elements: elements}
+
+	got, err := s.FindOne(strategy, ByLabel("Cancel"))
+	if err != nil {
+		t.Fatalf("FindOne: %v", err)
+	}
+	if got.Label != "Cancel" {
+		t.Errorf("FindOne returned element with label %q, want %q", got.Label, "Cancel")
 	}
 }

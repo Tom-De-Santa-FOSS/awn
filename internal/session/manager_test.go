@@ -332,3 +332,42 @@ func TestANSI_AlternateScreenBuffer(t *testing.T) {
 	}
 	t.Fatal("timed out: expected 'ALT' on alternate screen buffer")
 }
+
+// TestANSI_ScrollUp verifies that writing more lines than the screen height
+// causes the screen to scroll, pushing earlier content up and off-screen.
+func TestANSI_ScrollUp(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	rows := 3
+	id, err := m.Create(Config{Command: "true", Rows: rows, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write 5 lines to a 3-row terminal — first 2 lines should scroll off
+	_, err = io.WriteString(p.W, "AAA\r\nBBB\r\nCCC\r\nDDD\r\nEEE")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		// After scrolling, last line should have "EEE"
+		if strings.Contains(snap.Lines[rows-1], "EEE") {
+			// "AAA" should have scrolled off
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "AAA") {
+					t.Fatal("AAA should have scrolled off screen")
+				}
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'EEE' on last line after scrolling")
+}

@@ -22,12 +22,13 @@ func main() {
 	handler := rpc.NewHandler(mgr)
 	server := transport.NewServer(handler, *addr, token)
 
-	// Graceful shutdown
+	// Graceful shutdown: close all sessions before exiting
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
 		log.Println("shutting down...")
+		mgr.CloseAll()
 		os.Exit(0)
 	}()
 

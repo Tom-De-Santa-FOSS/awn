@@ -14,6 +14,14 @@ import (
 	"github.com/tom/awn/internal/screen"
 )
 
+// readBufPool reuses 32KB read buffers across sessions to reduce allocations.
+var readBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 32768)
+		return &buf
+	},
+}
+
 // realPTY is the production PTYStarter that uses creack/pty.
 type realPTY struct{}
 
@@ -117,6 +125,48 @@ func (m *Manager) Screenshot(id string) (*screen.Snapshot, error) {
 	return snap, nil
 }
 
+// ContainsText checks if the given text appears anywhere on screen without
+// building a full screenshot. It short-circuits on the first match.
+func (m *Manager) ContainsText(id string, text string) (bool, error) {
+	sess, err := m.get(id)
+	if err != nil {
+		return false, err
+	}
+
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+
+	sess.term.Lock()
+	defer sess.term.Unlock()
+
+	cols, rows := sess.term.Size()
+	if len(text) == 0 {
+		return true, nil
+	}
+
+	needle := []rune(text)
+	line := make([]rune, 0, cols)
+	for row := 0; row < rows; row++ {
+		line = line[:0]
+		end := cols
+		// Find last non-blank cell to avoid scanning trailing whitespace.
+		for end > 0 {
+			ch := sess.term.Cell(end-1, row).Char
+			if ch != ' ' && ch != 0 {
+				break
+			}
+			end--
+		}
+		for col := 0; col < end; col++ {
+			line = append(line, sess.term.Cell(col, row).Char)
+		}
+		if runesContains(line, needle) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Input sends keystrokes to a session.
 func (m *Manager) Input(id string, data string) error {
 	sess, err := m.get(id)
@@ -137,14 +187,12 @@ func (m *Manager) WaitForText(id string, text string, timeout time.Duration) err
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
-		snap, err := m.Screenshot(id)
+		found, err := m.ContainsText(id, text)
 		if err != nil {
 			return err
 		}
-		for _, line := range snap.Lines {
-			if strings.Contains(line, text) {
-				return nil
-			}
+		if found {
+			return nil
 		}
 		select {
 		case <-sess.updated:
@@ -170,7 +218,7 @@ func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Du
 	if err != nil {
 		return err
 	}
-	lastSnap := initSnap.Text()
+	lastLines := initSnap.Lines
 	stableSince := time.Now()
 
 	for {
@@ -188,9 +236,8 @@ func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Du
 		if err != nil {
 			return err
 		}
-		current := snap.Text()
-		if current != lastSnap {
-			lastSnap = current
+		if !linesEqual(snap.Lines, lastLines) {
+			lastLines = snap.Lines
 			stableSince = time.Now()
 		}
 	}
@@ -207,18 +254,29 @@ func (m *Manager) Close(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	sess.ptmx.Close()     // unblocks readLoop's Read()
-	sess.wg.Wait()        // wait for readLoop to exit
-	sess.once.Do(func() { // safe close of done channel
-		close(sess.done)
-	})
+	// Kill process first so it stops producing output, then close the PTY fd
+	// (which unblocks readLoop's Read), then wait for readLoop to finish.
 	if sess.Cmd.Process != nil {
 		sess.Cmd.Process.Kill()
 	}
+	sess.ptmx.Close()
+	sess.wg.Wait()
+	sess.once.Do(func() {
+		close(sess.done)
+	})
+	// Reap the child process. Ignore errors since Kill+ptmx.Close may have
+	// already caused it to be reaped by readLoop.
 	if sess.Cmd.Process != nil {
-		sess.Cmd.Wait()
+		sess.Cmd.Process.Wait() //nolint:errcheck
 	}
 	return nil
+}
+
+// CloseAll terminates all active sessions. Used for graceful shutdown.
+func (m *Manager) CloseAll() {
+	for _, id := range m.List() {
+		m.Close(id)
+	}
 }
 
 // List returns all active session IDs.
@@ -231,6 +289,37 @@ func (m *Manager) List() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// runesContains reports whether needle is a sub-slice of haystack.
+func runesContains(haystack, needle []rune) bool {
+	nl := len(needle)
+	for i := 0; i <= len(haystack)-nl; i++ {
+		match := true
+		for j := 0; j < nl; j++ {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// linesEqual compares two string slices element-by-element.
+func linesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) get(id string) (*Session, error) {
@@ -248,7 +337,9 @@ func (m *Manager) get(id string) (*Session, error) {
 func (s *Session) readLoop() {
 	defer s.wg.Done()
 
-	buf := make([]byte, 4096)
+	bufp := readBufPool.Get().(*[]byte)
+	defer readBufPool.Put(bufp)
+	buf := *bufp
 
 	for {
 		n, err := s.ptmx.Read(buf)

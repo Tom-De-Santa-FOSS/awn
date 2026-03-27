@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -81,6 +82,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("client connected: %s", conn.RemoteAddr())
 
+	var wmu sync.Mutex // protects conn.WriteMessage
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 64) // cap in-flight dispatches per connection
+
+	defer wg.Wait() // wait for in-flight handlers before conn.Close
+
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -90,37 +97,51 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		var req JSONRPCRequest
 		if err := json.Unmarshal(msg, &req); err != nil {
+			wmu.Lock()
 			s.sendError(conn, nil, -32700, "parse error")
+			wmu.Unlock()
 			continue
 		}
 
 		if req.JSONRPC != "2.0" {
+			wmu.Lock()
 			s.sendError(conn, req.ID, -32600, "invalid request: must be jsonrpc 2.0")
+			wmu.Unlock()
 			continue
 		}
 
-		result, err := s.handler.Dispatch(req.Method, req.Params)
-		if err != nil {
-			log.Printf("dispatch %s: %v", req.Method, err)
-			s.sendError(conn, req.ID, -32603, "internal error")
-			continue
-		}
+		sem <- struct{}{} // backpressure: block if 64 handlers in-flight
+		wg.Add(1)
+		go func(req JSONRPCRequest) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			Result:  result,
-			ID:      req.ID,
-		}
-		data, err := json.Marshal(resp)
-		if err != nil {
-			log.Printf("marshal response: %v", err)
-			s.sendError(conn, req.ID, -32603, "internal error")
-			continue
-		}
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			log.Printf("write response: %v", err)
-			return
-		}
+			result, err := s.handler.Dispatch(req.Method, req.Params)
+
+			wmu.Lock()
+			defer wmu.Unlock()
+
+			if err != nil {
+				log.Printf("dispatch %s: %v", req.Method, err)
+				s.sendError(conn, req.ID, -32603, "internal error")
+				return
+			}
+
+			resp := JSONRPCResponse{
+				JSONRPC: "2.0",
+				Result:  result,
+				ID:      req.ID,
+			}
+			data, err := json.Marshal(resp)
+			if err != nil {
+				log.Printf("marshal response: %v", err)
+				s.sendError(conn, req.ID, -32603, "internal error")
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("write response: %v", err)
+			}
+		}(req)
 	}
 }
 

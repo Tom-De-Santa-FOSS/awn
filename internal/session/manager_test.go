@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -15,10 +16,6 @@ import (
 // The write end is stored so tests can inject data; the read end is the "ptmx".
 type pipePTY struct {
 	W *os.File // tests write here
-}
-
-func newPipePTY() (*pipePTY, error) {
-	return &pipePTY{}, nil
 }
 
 func (p *pipePTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
@@ -331,6 +328,267 @@ func TestANSI_AlternateScreenBuffer(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out: expected 'ALT' on alternate screen buffer")
+}
+
+// TestContainsText_MatchesWithoutFullScreenshot verifies that ContainsText
+// finds text in the terminal buffer without building a full screenshot.
+func TestContainsText_MatchesWithoutFullScreenshot(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 40})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write text to the terminal
+	_, err = io.WriteString(p.W, "hello world\r\n")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		found, err := m.ContainsText(id, "hello")
+		if err != nil {
+			t.Fatalf("ContainsText: %v", err)
+		}
+		if found {
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: ContainsText never found 'hello'")
+}
+
+// TestContainsText_NotFound verifies ContainsText returns false for missing text.
+func TestContainsText_NotFound(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 40})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	found, err := m.ContainsText(id, "nonexistent")
+	if err != nil {
+		t.Fatalf("ContainsText: %v", err)
+	}
+	if found {
+		t.Error("expected false for text not on screen")
+	}
+}
+
+// TestCloseAll_ClosesAllSessions verifies CloseAll terminates every session.
+func TestCloseAll_ClosesAllSessions(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	_, err := m.Create(Config{Command: "true"})
+	if err != nil {
+		t.Fatalf("Create 1: %v", err)
+	}
+
+	// Need a new pipePTY for the second session since the pipe is consumed
+	p2 := &pipePTY{}
+	m.mu.Lock()
+	m.pty = p2
+	m.mu.Unlock()
+
+	_, err = m.Create(Config{Command: "true"})
+	if err != nil {
+		t.Fatalf("Create 2: %v", err)
+	}
+
+	if len(m.List()) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(m.List()))
+	}
+
+	m.CloseAll()
+
+	if len(m.List()) != 0 {
+		t.Fatalf("expected 0 sessions after CloseAll, got %d", len(m.List()))
+	}
+}
+
+// TestClose_KillsProcessBeforeClosingPTY verifies that Close() kills the child
+// process before closing the PTY fd, so readLoop exits quickly.
+func TestClose_KillsProcessBeforeClosingPTY(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Close should complete quickly (under 2s) because it kills the process
+	// first, causing readLoop to exit immediately when the PTY fd is closed.
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Close(id)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() took too long — process should be killed before waiting for readLoop")
+	}
+
+	// Session should be removed from the manager.
+	ids := m.List()
+	for _, sid := range ids {
+		if sid == id {
+			t.Error("session still in list after Close()")
+		}
+	}
+}
+
+// --- Benchmarks ---
+
+// BenchmarkScreenshot_Empty measures screenshot on an empty terminal.
+func BenchmarkScreenshot_Empty(b *testing.B) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+	id, err := m.Create(Config{Command: "true", Rows: 24, Cols: 80})
+	if err != nil {
+		b.Fatalf("Create: %v", err)
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := m.Screenshot(id)
+		if err != nil {
+			b.Fatalf("Screenshot: %v", err)
+		}
+	}
+}
+
+// BenchmarkScreenshot_FullScreen measures screenshot with all cells populated.
+func BenchmarkScreenshot_FullScreen(b *testing.B) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+	id, err := m.Create(Config{Command: "true", Rows: 24, Cols: 80})
+	if err != nil {
+		b.Fatalf("Create: %v", err)
+	}
+
+	// Fill the screen with text
+	var buf strings.Builder
+	for row := 0; row < 24; row++ {
+		for col := 0; col < 80; col++ {
+			buf.WriteByte('A' + byte(row%26))
+		}
+		if row < 23 {
+			buf.WriteString("\r\n")
+		}
+	}
+	_, err = io.WriteString(p.W, buf.String())
+	if err != nil {
+		b.Fatalf("write: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond) // let readLoop process
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := m.Screenshot(id)
+		if err != nil {
+			b.Fatalf("Screenshot: %v", err)
+		}
+	}
+}
+
+// BenchmarkContainsText measures ContainsText on a full screen.
+func BenchmarkContainsText(b *testing.B) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+	id, err := m.Create(Config{Command: "true", Rows: 24, Cols: 80})
+	if err != nil {
+		b.Fatalf("Create: %v", err)
+	}
+
+	// Fill the screen, put target text on last line
+	var buf strings.Builder
+	for row := 0; row < 23; row++ {
+		for col := 0; col < 80; col++ {
+			buf.WriteByte('X')
+		}
+		buf.WriteString("\r\n")
+	}
+	buf.WriteString("FINDME")
+	_, err = io.WriteString(p.W, buf.String())
+	if err != nil {
+		b.Fatalf("write: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	b.ResetTimer()
+	for b.Loop() {
+		found, err := m.ContainsText(id, "FINDME")
+		if err != nil {
+			b.Fatalf("ContainsText: %v", err)
+		}
+		if !found {
+			b.Fatal("expected to find text")
+		}
+	}
+}
+
+// BenchmarkReadLoop_PlainText measures readLoop throughput for plain text.
+func BenchmarkReadLoop_PlainText(b *testing.B) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+	_, err := m.Create(Config{Command: "true", Rows: 24, Cols: 80})
+	if err != nil {
+		b.Fatalf("Create: %v", err)
+	}
+
+	// 1KB chunk of plain text
+	chunk := strings.Repeat("abcdefghij", 100) + "\r\n"
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(chunk)))
+	for b.Loop() {
+		_, err := io.WriteString(p.W, chunk)
+		if err != nil {
+			b.Fatalf("write: %v", err)
+		}
+	}
+	// Let readLoop drain
+	time.Sleep(50 * time.Millisecond)
+}
+
+// BenchmarkReadLoop_ANSIHeavy measures readLoop throughput for escape-heavy output.
+func BenchmarkReadLoop_ANSIHeavy(b *testing.B) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+	_, err := m.Create(Config{Command: "true", Rows: 24, Cols: 80})
+	if err != nil {
+		b.Fatalf("Create: %v", err)
+	}
+
+	// Simulate TUI-like output with cursor moves and colors
+	var buf strings.Builder
+	for row := 1; row <= 24; row++ {
+		buf.WriteString(fmt.Sprintf("\x1b[%d;1H", row))          // move to row
+		buf.WriteString("\x1b[32m")                                // green
+		buf.WriteString(strings.Repeat("X", 80))                   // fill row
+		buf.WriteString("\x1b[0m")                                 // reset
+	}
+	chunk := buf.String()
+
+	b.ResetTimer()
+	b.SetBytes(int64(len(chunk)))
+	for b.Loop() {
+		_, err := io.WriteString(p.W, chunk)
+		if err != nil {
+			b.Fatalf("write: %v", err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
 }
 
 // TestANSI_ScrollUp verifies that writing more lines than the screen height

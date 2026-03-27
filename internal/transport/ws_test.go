@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -15,9 +17,13 @@ import (
 type mockDispatcher struct {
 	result any
 	err    error
+	delay  time.Duration
 }
 
 func (m *mockDispatcher) Dispatch(method string, params json.RawMessage) (any, error) {
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
 	return m.result, m.err
 }
 
@@ -200,6 +206,74 @@ func TestErrorResponseUsesGenericMessage(t *testing.T) {
 	}
 	if resp.Error.Message != "internal error" {
 		t.Errorf("error message = %q, want %q", resp.Error.Message, "internal error")
+	}
+}
+
+// slowDispatcher simulates a method that takes a long time, but only on the first call.
+type slowDispatcher struct {
+	calls  int
+	result any
+	mu     sync.Mutex
+}
+
+func (d *slowDispatcher) Dispatch(method string, params json.RawMessage) (any, error) {
+	d.mu.Lock()
+	d.calls++
+	call := d.calls
+	d.mu.Unlock()
+	if call == 1 {
+		time.Sleep(500 * time.Millisecond) // first call is slow
+	}
+	return d.result, nil
+}
+
+// TestSlowDispatchDoesNotBlockSameConnection verifies that a slow RPC call
+// doesn't block subsequent requests on the same WebSocket connection.
+func TestSlowDispatchDoesNotBlockSameConnection(t *testing.T) {
+	d := &slowDispatcher{result: "ok"}
+	srv := newTestServer(t, d, "")
+	defer srv.Close()
+
+	conn, _, err := dialWS(t, srv, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Send two requests back-to-back
+	req1 := JSONRPCRequest{JSONRPC: "2.0", Method: "slow", ID: 1}
+	data1, _ := json.Marshal(req1)
+	if err := conn.WriteMessage(websocket.TextMessage, data1); err != nil {
+		t.Fatalf("write req1: %v", err)
+	}
+
+	req2 := JSONRPCRequest{JSONRPC: "2.0", Method: "fast", ID: 2}
+	data2, _ := json.Marshal(req2)
+	if err := conn.WriteMessage(websocket.TextMessage, data2); err != nil {
+		t.Fatalf("write req2: %v", err)
+	}
+
+	// With async dispatch, req2 (fast) should arrive BEFORE req1 (slow).
+	// The first response we read should be for ID 2.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msg1, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read first response: %v", err)
+	}
+	var first JSONRPCResponse
+	if err := json.Unmarshal(msg1, &first); err != nil {
+		t.Fatalf("unmarshal first response: %v", err)
+	}
+
+	firstID, _ := first.ID.(float64)
+	if firstID != 2 {
+		t.Fatalf("expected fast request (ID=2) to complete first, got ID=%v", first.ID)
+	}
+
+	// Read the slow response too
+	_, _, err = conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read second response: %v", err)
 	}
 }
 

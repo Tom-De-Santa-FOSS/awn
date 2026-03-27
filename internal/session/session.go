@@ -5,7 +5,20 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/creack/pty"
 )
+
+// DefaultRows and DefaultCols are the fallback terminal dimensions.
+const (
+	DefaultRows = 24
+	DefaultCols = 80
+)
+
+// PTYStarter abstracts PTY creation so tests can inject a fake.
+type PTYStarter interface {
+	Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error)
+}
 
 // Session wraps a PTY process with terminal emulation.
 type Session struct {
@@ -15,8 +28,13 @@ type Session struct {
 	rows    int
 	cols    int
 	buf     [][]rune
+	curRow  int
+	curCol  int
 	mu      sync.RWMutex
+	once    sync.Once      // protects done channel close
+	wg      sync.WaitGroup // tracks readLoop goroutine
 	done    chan struct{}
+	updated chan struct{} // buffered(1), signaled on screen change
 	created time.Time
 }
 
@@ -30,9 +48,9 @@ type Config struct {
 
 func (c *Config) defaults() {
 	if c.Rows == 0 {
-		c.Rows = 24
+		c.Rows = DefaultRows
 	}
 	if c.Cols == 0 {
-		c.Cols = 80
+		c.Cols = DefaultCols
 	}
 }

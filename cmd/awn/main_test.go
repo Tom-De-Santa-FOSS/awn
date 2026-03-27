@@ -48,7 +48,7 @@ func TestAuthHeaderSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected dial error: %v", err)
 	}
-	conn.Close()
+	conn.Close() //nolint:errcheck
 
 	got := <-received
 	auth := got.Get("Authorization")

@@ -171,7 +171,7 @@ func TestWaitForText_FindsText(t *testing.T) {
 	// Write in a separate goroutine after a short delay.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		io.WriteString(p.W, "magic_token\r\n")
+		_, _ = io.WriteString(p.W, "magic_token\r\n")
 	}()
 
 	err = m.WaitForText(id, "magic_token", 3*time.Second)
@@ -573,10 +573,10 @@ func BenchmarkReadLoop_ANSIHeavy(b *testing.B) {
 	// Simulate TUI-like output with cursor moves and colors
 	var buf strings.Builder
 	for row := 1; row <= 24; row++ {
-		buf.WriteString(fmt.Sprintf("\x1b[%d;1H", row))          // move to row
-		buf.WriteString("\x1b[32m")                                // green
-		buf.WriteString(strings.Repeat("X", 80))                   // fill row
-		buf.WriteString("\x1b[0m")                                 // reset
+		fmt.Fprintf(&buf, "\x1b[%d;1H", row)     // move to row
+		buf.WriteString("\x1b[32m")              // green
+		buf.WriteString(strings.Repeat("X", 80)) // fill row
+		buf.WriteString("\x1b[0m")               // reset
 	}
 	chunk := buf.String()
 

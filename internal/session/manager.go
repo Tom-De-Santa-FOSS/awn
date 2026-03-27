@@ -257,9 +257,9 @@ func (m *Manager) Close(id string) error {
 	// Kill process first so it stops producing output, then close the PTY fd
 	// (which unblocks readLoop's Read), then wait for readLoop to finish.
 	if sess.Cmd.Process != nil {
-		sess.Cmd.Process.Kill()
+		_ = sess.Cmd.Process.Kill()
 	}
-	sess.ptmx.Close()
+	_ = sess.ptmx.Close()
 	sess.wg.Wait()
 	sess.once.Do(func() {
 		close(sess.done)
@@ -275,7 +275,7 @@ func (m *Manager) Close(id string) error {
 // CloseAll terminates all active sessions. Used for graceful shutdown.
 func (m *Manager) CloseAll() {
 	for _, id := range m.List() {
-		m.Close(id)
+		_ = m.Close(id)
 	}
 }
 
@@ -348,7 +348,7 @@ func (s *Session) readLoop() {
 		}
 
 		s.mu.Lock()
-		s.term.Write(buf[:n])
+		_, _ = s.term.Write(buf[:n])
 		s.mu.Unlock()
 
 		// Non-blocking notify
@@ -358,4 +358,3 @@ func (s *Session) readLoop() {
 		}
 	}
 }
-

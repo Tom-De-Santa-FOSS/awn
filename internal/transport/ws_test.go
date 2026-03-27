@@ -56,7 +56,7 @@ func newTestServer(t *testing.T, d Dispatcher, token string) *httptest.Server {
 	mux.HandleFunc("/", s.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	return httptest.NewServer(mux)
 }
@@ -72,7 +72,7 @@ func TestHealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -96,7 +96,7 @@ func TestWebSocketUpgradeNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 }
 
 func TestWebSocketUpgrade401WhenTokenSetAndNoAuthHeader(t *testing.T) {
@@ -146,7 +146,7 @@ func TestWebSocketUpgradeSucceedsWithCorrectToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial with correct token: %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 }
 
 func TestWebSocketUpgradeRejectedWithOriginHeader(t *testing.T) {
@@ -176,7 +176,7 @@ func TestErrorResponseUsesGenericMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -238,7 +238,7 @@ func TestSlowDispatchDoesNotBlockSameConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Send two requests back-to-back
 	req1 := JSONRPCRequest{JSONRPC: "2.0", Method: "slow", ID: 1}
@@ -255,7 +255,7 @@ func TestSlowDispatchDoesNotBlockSameConnection(t *testing.T) {
 
 	// With async dispatch, req2 (fast) should arrive BEFORE req1 (slow).
 	// The first response we read should be for ID 2.
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, msg1, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read first response: %v", err)
@@ -287,7 +287,7 @@ func TestValidJSONRPCRequestDispatchesCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",

@@ -79,6 +79,55 @@ echo "Test: bump_major 0.1.1 -> 1.0.0"
   assert_eq "major bumped" "1.0.0" "$(cat VERSION)"
 )
 
+# Test 5: do_release calls bump, git tag, git push, gh release
+echo "Test: do_release patch creates tag and calls gh release"
+(
+  cd "$TMPDIR"
+  echo "0.0.0" > VERSION
+
+  # Mock git and gh — record calls
+  MOCK_LOG="$TMPDIR/mock_calls.log"
+  > "$MOCK_LOG"
+  mock_git() { echo "git $*" >> "$MOCK_LOG"; }
+  mock_gh() { echo "gh $*" >> "$MOCK_LOG"; }
+
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GIT_CMD=mock_git
+  GH_CMD=mock_gh
+
+  do_release patch
+
+  assert_eq "version bumped to 0.0.1" "0.0.1" "$(cat VERSION)"
+  assert_eq "git tag created" "git tag v0.0.1" "$(sed -n '1p' "$MOCK_LOG")"
+  assert_eq "git push tag" "git push origin v0.0.1" "$(sed -n '2p' "$MOCK_LOG")"
+  assert_eq "gh release created" "gh release create v0.0.1 --title v0.0.1 --generate-notes" "$(sed -n '3p' "$MOCK_LOG")"
+)
+
+# Test 6: do_release rejects invalid bump type
+echo "Test: do_release rejects invalid bump type"
+(
+  cd "$TMPDIR"
+  echo "0.0.0" > VERSION
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GIT_CMD=true
+  GH_CMD=true
+
+  output="$(do_release foo 2>&1 || true)"
+  assert_eq "error message" "Error: bump type must be patch, minor, or major" "$output"
+)
+
+# Test 7: do_release with minor
+echo "Test: do_release minor bumps minor version"
+(
+  cd "$TMPDIR"
+  echo "0.0.5" > VERSION
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GIT_CMD=true
+  GH_CMD=true
+  do_release minor
+  assert_eq "version is 0.1.0" "0.1.0" "$(cat VERSION)"
+)
+
 echo ""
 read -r pass fail < "$RESULTS_FILE"
 echo "Results: $pass passed, $fail failed"

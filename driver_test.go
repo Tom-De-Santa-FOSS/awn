@@ -135,6 +135,50 @@ func TestSession_Screen_ReturnsCorrectDimensions(t *testing.T) {
 	}
 }
 
+func TestSession_Screen_CapturesReverseAttr(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("\x1b[7mhi\x1b[0m")
+	time.Sleep(20 * time.Millisecond)
+
+	scr := s.Screen()
+	cell := scr.Cells[0][0]
+	if cell.Char != 'h' {
+		t.Fatalf("char = %q, want 'h'", cell.Char)
+	}
+	if cell.Attrs&AttrReverse == 0 {
+		t.Errorf("expected AttrReverse, got attrs=%d", cell.Attrs)
+	}
+}
+
+func TestSession_Screen_CapturesFGColor(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("\x1b[31mr\x1b[0m")
+	time.Sleep(20 * time.Millisecond)
+
+	scr := s.Screen()
+	cell := scr.Cells[0][0]
+	if cell.Char != 'r' {
+		t.Fatalf("char = %q, want 'r'", cell.Char)
+	}
+	if cell.FG == DefaultColor {
+		t.Error("expected non-default FG for red text")
+	}
+}
+
 func TestSession_Close_RemovesFromDriver(t *testing.T) {
 	p := &pipePTY{}
 	d := NewDriver(WithPTY(p))
@@ -211,5 +255,25 @@ func TestSession_FindOne_ReturnsFirstMatchingElement(t *testing.T) {
 	}
 	if got.Label != "Cancel" {
 		t.Errorf("FindOne returned element with label %q, want %q", got.Label, "Cancel")
+	}
+}
+
+func TestSession_FindOne_ErrorWhenNoElementMatches(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	strategy := &mockStrategy{elements: []Element{
+		{Type: "button", Label: "OK"},
+	}}
+
+	_, err = s.FindOne(strategy, ByLabel("Cancel"))
+	if err == nil {
+		t.Fatal("expected error when no element matches, got nil")
 	}
 }

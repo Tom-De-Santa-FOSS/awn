@@ -17,3 +17,11 @@ func TestByLabel_DoesNotMatchDifferentLabel(t *testing.T) {
 		t.Fatal("expected ByLabel not to match element with different label")
 	}
 }
+
+func TestByType_MatchesElement(t *testing.T) {
+	e := Element{Type: "button"}
+	match := ByType("button")
+	if !match(e) {
+		t.Fatal("expected ByType to match element with same type")
+	}
+}

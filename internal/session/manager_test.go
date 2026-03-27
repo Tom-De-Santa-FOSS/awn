@@ -279,3 +279,56 @@ func TestANSI_CursorPositionTracking(t *testing.T) {
 	}
 	t.Fatal("timed out: expected 'Z' at row 4 from ANSI cursor positioning")
 }
+
+// TestANSI_AlternateScreenBuffer verifies that switching to the alternate
+// screen buffer and writing content is captured correctly in screenshots.
+func TestANSI_AlternateScreenBuffer(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Write "MAIN" on main screen
+	_, err = io.WriteString(p.W, "MAIN")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Wait for "MAIN" to appear
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, _ := m.Screenshot(id)
+		if strings.Contains(snap.Lines[0], "MAIN") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Switch to alternate screen buffer (ESC[?1049h) and write "ALT"
+	_, err = io.WriteString(p.W, "\x1b[?1049h\x1b[1;1HALT")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		if strings.Contains(snap.Lines[0], "ALT") {
+			// "MAIN" should NOT be visible on the alternate screen
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "MAIN") {
+					t.Fatal("MAIN should not be visible on alternate screen")
+				}
+			}
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'ALT' on alternate screen buffer")
+}

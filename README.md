@@ -1,38 +1,52 @@
 # awn
 
-TUI automation for AI agents. A daemon that manages headless terminal sessions so AI agents can screenshot, send input, and wait on terminal state.
+TUI automation for AI agents. Manage headless terminal sessions — screenshot, send input, detect UI elements, and wait on terminal state.
 
-Recreates the core of [agent-tui](https://github.com/pproenca/agent-tui) in Go.
+## Install
 
-<img src="https://skillicons.dev/icons?i=go" alt="Go" />
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tom-De-Santa-FOSS/awn/master/install.sh | bash
+```
 
 ## Usage
 
 ```bash
-make build              # bin/awn + bin/awnd
-awnd &                  # start daemon on 127.0.0.1:7600
-
-awn create bash         # start a session
+awnd &                  # start daemon
+awn create yazi         # start a session
 awn screenshot <id>     # capture screen
-awn input <id> "ls\n"   # send keystrokes
-awn wait <id> "done"    # block until text appears
+awn detect <id>         # accessibility tree
+awn input <id> "j"      # send keystrokes
+awn wait <id> "Status"  # block until text appears
 awn close <id>          # terminate session
+awn list                # show active sessions
 ```
 
-## RPC Methods
+## Go Library
 
-JSON-RPC 2.0 over WebSocket.
+```go
+d := awn.NewDriver()
+s, _ := d.Session("yazi")
+s.WaitForText("Status", 5*time.Second)
+elements := s.FindAll(awtreestrategy.New())
+s.SendKeys("q")
+d.Close(s.ID)
+```
+
+## RPC
+
+JSON-RPC 2.0 over WebSocket at `127.0.0.1:7600`.
 
 | Method | Params | Returns |
 |--------|--------|---------|
 | `create` | `{command, args?, rows?, cols?}` | `{id}` |
 | `screenshot` | `{id}` | `{rows, cols, lines, cursor}` |
+| `detect` | `{id}` | `{elements}` |
 | `input` | `{id, data}` | `null` |
 | `wait_for_text` | `{id, text, timeout_ms?}` | `null` |
 | `wait_for_stable` | `{id, stable_ms?, timeout_ms?}` | `null` |
 | `close` | `{id}` | `null` |
-| `list` | none | `{sessions: [id...]}` |
+| `list` | none | `{sessions}` |
 
 ## Auth
 
-Set `AWN_TOKEN` on both daemon and CLI for Bearer token auth. Connections with a non-empty `Origin` header are rejected.
+Set `AWN_TOKEN` env var on both daemon and CLI for Bearer token auth.

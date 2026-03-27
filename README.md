@@ -1,9 +1,10 @@
 # awn
-<img src="https://skillicons.dev/icons?i=go" alt="Go" />
 
 TUI automation for AI agents. A daemon that manages headless terminal sessions so AI agents can screenshot, send input, and wait on terminal state.
 
 Recreates the core of [agent-tui](https://github.com/pproenca/agent-tui) in Go.
+
+<img src="https://skillicons.dev/icons?i=go" alt="Go" />
 
 ## Usage
 

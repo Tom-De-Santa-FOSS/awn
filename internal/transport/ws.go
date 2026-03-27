@@ -58,7 +58,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/", s.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	log.Printf("awn daemon listening on %s", s.addr)
@@ -78,7 +78,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("websocket upgrade: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	log.Printf("client connected: %s", conn.RemoteAddr())
 

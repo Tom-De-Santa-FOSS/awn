@@ -105,7 +105,7 @@ func call(addr, method string, params any) string {
 	if err != nil {
 		fatal("connect to daemon: " + err.Error())
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	req := map[string]any{
 		"jsonrpc": "2.0",

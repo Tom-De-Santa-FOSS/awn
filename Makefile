@@ -1,4 +1,4 @@
-.PHONY: build daemon cli clean test test-scripts test-all
+.PHONY: build daemon cli clean test test-scripts test-all lint fmt
 
 build: daemon cli
 
@@ -22,6 +22,13 @@ test-scripts:
 	bash scripts/install_test.sh
 
 test-all: test test-scripts
+
+lint:
+	golangci-lint run ./...
+
+fmt:
+	gofumpt -w .
+	goimports -w .
 
 install: build
 	cp bin/awn bin/awnd $(GOPATH)/bin/ 2>/dev/null || cp bin/awn bin/awnd ~/.local/bin/

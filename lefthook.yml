@@ -1,0 +1,20 @@
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: gofumpt -l -w {staged_files} && git add {staged_files}
+    imports:
+      glob: "*.go"
+      run: goimports -w {staged_files} && git add {staged_files}
+    lint:
+      glob: "*.go"
+      run: golangci-lint run --fix ./...
+    vet:
+      run: go vet ./...
+
+pre-push:
+  parallel: true
+  commands:
+    test:
+      run: go test ./... -race -count=1

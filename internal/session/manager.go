@@ -14,6 +14,14 @@ import (
 	"github.com/tom/awn/internal/screen"
 )
 
+// readBufPool reuses 32KB read buffers across sessions to reduce allocations.
+var readBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 32768)
+		return &buf
+	},
+}
+
 // realPTY is the production PTYStarter that uses creack/pty.
 type realPTY struct{}
 
@@ -117,6 +125,39 @@ func (m *Manager) Screenshot(id string) (*screen.Snapshot, error) {
 	return snap, nil
 }
 
+// ContainsText checks if the given text appears anywhere on screen without
+// building a full screenshot. It short-circuits on the first match.
+func (m *Manager) ContainsText(id string, text string) (bool, error) {
+	sess, err := m.get(id)
+	if err != nil {
+		return false, err
+	}
+
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+
+	sess.term.Lock()
+	defer sess.term.Unlock()
+
+	cols, rows := sess.term.Size()
+	needle := []rune(text)
+	if len(needle) == 0 {
+		return true, nil
+	}
+
+	line := make([]rune, cols)
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			line[col] = sess.term.Cell(col, row).Char
+		}
+		trimmed := strings.TrimRight(string(line), " \x00")
+		if strings.Contains(trimmed, text) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Input sends keystrokes to a session.
 func (m *Manager) Input(id string, data string) error {
 	sess, err := m.get(id)
@@ -137,14 +178,12 @@ func (m *Manager) WaitForText(id string, text string, timeout time.Duration) err
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
-		snap, err := m.Screenshot(id)
+		found, err := m.ContainsText(id, text)
 		if err != nil {
 			return err
 		}
-		for _, line := range snap.Lines {
-			if strings.Contains(line, text) {
-				return nil
-			}
+		if found {
+			return nil
 		}
 		select {
 		case <-sess.updated:
@@ -170,7 +209,7 @@ func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Du
 	if err != nil {
 		return err
 	}
-	lastSnap := initSnap.Text()
+	lastLines := initSnap.Lines
 	stableSince := time.Now()
 
 	for {
@@ -188,9 +227,8 @@ func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Du
 		if err != nil {
 			return err
 		}
-		current := snap.Text()
-		if current != lastSnap {
-			lastSnap = current
+		if !linesEqual(snap.Lines, lastLines) {
+			lastLines = snap.Lines
 			stableSince = time.Now()
 		}
 	}
@@ -207,18 +245,27 @@ func (m *Manager) Close(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	sess.ptmx.Close()     // unblocks readLoop's Read()
-	sess.wg.Wait()        // wait for readLoop to exit
-	sess.once.Do(func() { // safe close of done channel
-		close(sess.done)
-	})
+	// Kill process first so it stops producing output, then close the PTY fd
+	// (which unblocks readLoop's Read), then wait for readLoop to finish.
 	if sess.Cmd.Process != nil {
 		sess.Cmd.Process.Kill()
 	}
+	sess.ptmx.Close()
+	sess.wg.Wait()
+	sess.once.Do(func() {
+		close(sess.done)
+	})
 	if sess.Cmd.Process != nil {
-		sess.Cmd.Wait()
+		sess.Cmd.Process.Wait()
 	}
 	return nil
+}
+
+// CloseAll terminates all active sessions. Used for graceful shutdown.
+func (m *Manager) CloseAll() {
+	for _, id := range m.List() {
+		m.Close(id)
+	}
 }
 
 // List returns all active session IDs.
@@ -231,6 +278,19 @@ func (m *Manager) List() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// linesEqual compares two string slices element-by-element.
+func linesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) get(id string) (*Session, error) {
@@ -248,7 +308,9 @@ func (m *Manager) get(id string) (*Session, error) {
 func (s *Session) readLoop() {
 	defer s.wg.Done()
 
-	buf := make([]byte, 4096)
+	bufp := readBufPool.Get().(*[]byte)
+	defer readBufPool.Put(bufp)
+	buf := *bufp
 
 	for {
 		n, err := s.ptmx.Read(buf)

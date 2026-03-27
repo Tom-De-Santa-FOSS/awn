@@ -41,28 +41,48 @@ func TestDefaultConstants(t *testing.T) {
 	}
 }
 
-// TestMakeBuffer_CorrectDimensions verifies makeBuffer produces the right shape.
-func TestMakeBuffer_CorrectDimensions(t *testing.T) {
-	rows, cols := 5, 10
-	buf := makeBuffer(rows, cols)
-	if len(buf) != rows {
-		t.Fatalf("got %d rows, want %d", len(buf), rows)
+// TestNewSession_CorrectDimensions verifies a new session screenshot has the right shape.
+func TestNewSession_CorrectDimensions(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 10})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	for i, row := range buf {
-		if len(row) != cols {
-			t.Fatalf("row %d: got %d cols, want %d", i, len(row), cols)
-		}
+
+	snap, err := m.Screenshot(id)
+	if err != nil {
+		t.Fatalf("Screenshot: %v", err)
+	}
+	if snap.Rows != 5 {
+		t.Errorf("got %d rows, want 5", snap.Rows)
+	}
+	if snap.Cols != 10 {
+		t.Errorf("got %d cols, want 10", snap.Cols)
+	}
+	if len(snap.Lines) != 5 {
+		t.Errorf("got %d lines, want 5", len(snap.Lines))
 	}
 }
 
-// TestMakeBuffer_AllSpaces verifies every cell starts as a space.
-func TestMakeBuffer_AllSpaces(t *testing.T) {
-	buf := makeBuffer(3, 4)
-	for r, row := range buf {
-		for c, ch := range row {
-			if ch != ' ' {
-				t.Errorf("buf[%d][%d] = %q, want ' '", r, c, ch)
-			}
+// TestNewSession_EmptyScreen verifies a fresh session screenshot has empty lines.
+func TestNewSession_EmptyScreen(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 3, Cols: 4})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	snap, err := m.Screenshot(id)
+	if err != nil {
+		t.Fatalf("Screenshot: %v", err)
+	}
+	for i, line := range snap.Lines {
+		if line != "" {
+			t.Errorf("line %d = %q, want empty", i, line)
 		}
 	}
 }
@@ -181,4 +201,42 @@ func TestWaitForText_Timeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "timeout") {
 		t.Errorf("error should mention timeout, got: %v", err)
 	}
+}
+
+// TestANSI_CursorMovement verifies that ANSI cursor-move escape sequences
+// position text correctly instead of appearing as raw escape codes.
+func TestANSI_CursorMovement(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 5, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// ESC[3;5H moves cursor to row 3, col 5 (1-based), then write "XY"
+	_, err = io.WriteString(p.W, "\x1b[3;5HXY")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		// Row 2 (0-based) should contain "XY" starting at col 4 (0-based)
+		if len(snap.Lines) > 2 && strings.Contains(snap.Lines[2], "XY") {
+			// Verify no raw escape codes appear anywhere
+			for _, line := range snap.Lines {
+				if strings.Contains(line, "\x1b") {
+					t.Fatalf("raw escape code found in screenshot: %q", line)
+				}
+			}
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'XY' at row 2 from ANSI cursor move")
 }

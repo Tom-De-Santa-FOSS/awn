@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 )
 
 // DefaultRows and DefaultCols are the fallback terminal dimensions.
@@ -27,9 +28,7 @@ type Session struct {
 	ptmx    *os.File
 	rows    int
 	cols    int
-	buf     [][]rune
-	curRow  int
-	curCol  int
+	term    vt10x.Terminal
 	mu      sync.RWMutex
 	once    sync.Once      // protects done channel close
 	wg      sync.WaitGroup // tracks readLoop goroutine

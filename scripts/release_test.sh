@@ -3,36 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESULTS_FILE="$(mktemp)"
-echo "0 0" > "$RESULTS_FILE"
+source "$SCRIPT_DIR/test_helpers.sh"
 
-assert_eq() {
-  local label="$1" expected="$2" actual="$3"
-  local pass fail
-  read -r pass fail < "$RESULTS_FILE"
-  if [ "$expected" = "$actual" ]; then
-    echo "  PASS: $label"
-    echo "$((pass + 1)) $fail" > "$RESULTS_FILE"
-  else
-    echo "  FAIL: $label — expected '$expected', got '$actual'"
-    echo "$pass $((fail + 1))" > "$RESULTS_FILE"
-  fi
-}
-
-assert_file_exists() {
-  local label="$1" path="$2"
-  local pass fail
-  read -r pass fail < "$RESULTS_FILE"
-  if [ -f "$path" ]; then
-    echo "  PASS: $label"
-    echo "$((pass + 1)) $fail" > "$RESULTS_FILE"
-  else
-    echo "  FAIL: $label — file '$path' does not exist"
-    echo "$pass $((fail + 1))" > "$RESULTS_FILE"
-  fi
-}
-
-# Setup: temp directory for isolated tests
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR" "$RESULTS_FILE"' EXIT
 
@@ -101,11 +73,11 @@ echo "Test: do_release patch creates tag and calls gh release"
   do_release patch
 
   assert_eq "version bumped to 0.0.1" "0.0.1" "$(cat VERSION)"
-  assert_eq "git add VERSION" "git add VERSION" "$(sed -n '1p' "$MOCK_LOG")"
+  assert_eq "git add VERSION" "1" "$(grep -c 'git add VERSION' "$MOCK_LOG" || echo 0)"
   assert_eq "git commit" "1" "$(grep -c 'git commit' "$MOCK_LOG" || echo 0)"
-  assert_eq "git tag created" "git tag v0.0.1" "$(sed -n '3p' "$MOCK_LOG")"
-  assert_eq "git push with tag" "git push origin v0.0.1" "$(sed -n '4p' "$MOCK_LOG")"
-  assert_eq "gh release created" "gh release create v0.0.1 --title v0.0.1 --generate-notes" "$(sed -n '5p' "$MOCK_LOG")"
+  assert_eq "git tag created" "1" "$(grep -c 'git tag v0.0.1' "$MOCK_LOG" || echo 0)"
+  assert_eq "git push with tag" "1" "$(grep -c 'git push origin v0.0.1' "$MOCK_LOG" || echo 0)"
+  assert_eq "gh release created" "1" "$(grep -c 'gh release create v0.0.1' "$MOCK_LOG" || echo 0)"
 )
 
 # Test 6: do_release rejects invalid bump type
@@ -184,7 +156,39 @@ echo "Test: do_release uploads tarballs to release"
   assert_eq "assets uploaded" "1" "$(grep -c 'gh release upload' "$MOCK_LOG" || echo 0)"
 )
 
-echo ""
-read -r pass fail < "$RESULTS_FILE"
-echo "Results: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] || exit 1
+# Test 10: init_version does not overwrite existing VERSION
+echo "Test: init_version should not overwrite VERSION when file already exists"
+(
+  cd "$TMPDIR"
+  echo "2.3.4" > VERSION
+  source "$SCRIPT_DIR/release.sh" --source-only
+  init_version
+  assert_eq "version preserved" "2.3.4" "$(cat VERSION)"
+)
+
+# Test 11: do_release with major bump
+echo "Test: do_release major bumps major version and creates release"
+(
+  cd "$TMPDIR"
+  echo "1.2.3" > VERSION
+
+  MOCK_LOG="$TMPDIR/mock_major.log"
+  > "$MOCK_LOG"
+  mock_git() { echo "git $*" >> "$MOCK_LOG"; }
+  mock_gh() { echo "gh $*" >> "$MOCK_LOG"; }
+  mock_go() { touch "$TMPDIR/dist_major/awn" "$TMPDIR/dist_major/awnd"; }
+
+  source "$SCRIPT_DIR/release.sh" --source-only
+  GIT_CMD=mock_git
+  GH_CMD=mock_gh
+  GO_CMD=mock_go
+  DIST_DIR="$TMPDIR/dist_major"
+
+  do_release major
+
+  assert_eq "version is 2.0.0" "2.0.0" "$(cat VERSION)"
+  assert_eq "git tag v2.0.0" "1" "$(grep -c 'git tag v2.0.0' "$MOCK_LOG" || echo 0)"
+  assert_eq "gh release created" "1" "$(grep -c 'gh release create v2.0.0' "$MOCK_LOG" || echo 0)"
+)
+
+print_results

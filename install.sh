@@ -5,7 +5,11 @@ set -euo pipefail
 
 REPO="${REPO:-Tom-De-Santa-FOSS/awn}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-CURL_CMD="${CURL_CMD:-curl -fsSL}"
+if [ "${AWN_TESTING:-0}" = "1" ]; then
+  CURL_CMD="${CURL_CMD:-curl -fsSL}"
+else
+  CURL_CMD="curl -fsSL"
+fi
 VERSION="${VERSION:-}"
 
 detect_os() {
@@ -33,8 +37,14 @@ build_download_url() {
 }
 
 get_latest_version() {
-  $CURL_CMD "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/'
+  local ver
+  ver="$($CURL_CMD "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || true)"
+  if [ -z "$ver" ]; then
+    echo "Failed to detect latest version from GitHub API" >&2
+    return 1
+  fi
+  echo "$ver"
 }
 
 do_install() {
@@ -59,7 +69,7 @@ install_skill() {
   local skill_dir="${1:-$HOME/.claude/skills/awn}"
   mkdir -p "$skill_dir"
   $CURL_CMD -o "$skill_dir/SKILL.md" \
-    "https://raw.githubusercontent.com/${REPO}/master/.claude/skills/awn/SKILL.md"
+    "https://raw.githubusercontent.com/${REPO}/v${VERSION}/.claude/skills/awn/SKILL.md"
 }
 
 # Allow sourcing without executing main
@@ -82,7 +92,7 @@ main() {
   do_install "$os" "$arch"
   install_skill
   echo "Installed awn and awnd to $INSTALL_DIR"
-  echo "Installed Claude Code skill to ~/.claude/skills/awn/SKILL.md"
+  echo "Installed Claude Code skill to ${HOME}/.claude/skills/awn/SKILL.md"
   echo ""
   echo "Make sure $INSTALL_DIR is in your PATH."
 }

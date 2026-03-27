@@ -10,29 +10,23 @@ read_version() {
   cat VERSION
 }
 
-bump_patch() {
+bump_version() {
+  local component="${1:?Usage: bump_version <patch|minor|major>}"
   local ver
   ver="$(read_version)"
   local major minor patch
   IFS='.' read -r major minor patch <<< "$ver"
-  echo "$major.$minor.$((patch + 1))" > VERSION
+  case "$component" in
+    patch) echo "$major.$minor.$((patch + 1))" > VERSION ;;
+    minor) echo "$major.$((minor + 1)).0" > VERSION ;;
+    major) echo "$((major + 1)).0.0" > VERSION ;;
+    *) echo "Error: invalid component '$component'" >&2; return 1 ;;
+  esac
 }
 
-bump_minor() {
-  local ver
-  ver="$(read_version)"
-  local major minor patch
-  IFS='.' read -r major minor patch <<< "$ver"
-  echo "$major.$((minor + 1)).0" > VERSION
-}
-
-bump_major() {
-  local ver
-  ver="$(read_version)"
-  local major minor patch
-  IFS='.' read -r major minor patch <<< "$ver"
-  echo "$((major + 1)).0.0" > VERSION
-}
+bump_patch() { bump_version patch; }
+bump_minor() { bump_version minor; }
+bump_major() { bump_version major; }
 
 GIT_CMD="${GIT_CMD:-git}"
 GH_CMD="${GH_CMD:-gh}"

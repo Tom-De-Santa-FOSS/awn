@@ -13,16 +13,33 @@ import (
 	"github.com/tom/awn/internal/screen"
 )
 
+// realPTY is the production PTYStarter that uses creack/pty.
+type realPTY struct{}
+
+func (realPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+	return pty.StartWithSize(cmd, ws)
+}
+
 // Manager handles multiple concurrent TUI sessions.
 type Manager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
+	pty      PTYStarter
 }
 
-// NewManager creates a session manager.
+// NewManager creates a session manager with the real PTY backend.
 func NewManager() *Manager {
 	return &Manager{
 		sessions: make(map[string]*Session),
+		pty:      realPTY{},
+	}
+}
+
+// NewManagerWithPTY creates a session manager with an injected PTY backend.
+func NewManagerWithPTY(p PTYStarter) *Manager {
+	return &Manager{
+		sessions: make(map[string]*Session),
+		pty:      p,
 	}
 }
 
@@ -32,12 +49,12 @@ func (m *Manager) Create(cfg Config) (string, error) {
 
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("TERM=xterm-256color"),
+		"TERM=xterm-256color",
 		fmt.Sprintf("COLUMNS=%d", cfg.Cols),
 		fmt.Sprintf("LINES=%d", cfg.Rows),
 	)
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
+	ptmx, err := m.pty.Start(cmd, &pty.Winsize{
 		Rows: uint16(cfg.Rows),
 		Cols: uint16(cfg.Cols),
 	})
@@ -45,7 +62,7 @@ func (m *Manager) Create(cfg Config) (string, error) {
 		return "", fmt.Errorf("pty start: %w", err)
 	}
 
-	id := uuid.New().String()[:8]
+	id := uuid.New().String()
 	sess := &Session{
 		ID:      id,
 		Cmd:     cmd,
@@ -54,6 +71,7 @@ func (m *Manager) Create(cfg Config) (string, error) {
 		cols:    cfg.Cols,
 		buf:     makeBuffer(cfg.Rows, cfg.Cols),
 		done:    make(chan struct{}),
+		updated: make(chan struct{}, 1),
 		created: time.Now(),
 	}
 
@@ -61,6 +79,7 @@ func (m *Manager) Create(cfg Config) (string, error) {
 	m.sessions[id] = sess
 	m.mu.Unlock()
 
+	sess.wg.Add(1)
 	go sess.readLoop()
 
 	return id, nil
@@ -77,9 +96,10 @@ func (m *Manager) Screenshot(id string) (*screen.Snapshot, error) {
 	defer sess.mu.RUnlock()
 
 	snap := &screen.Snapshot{
-		Rows:  sess.rows,
-		Cols:  sess.cols,
-		Lines: make([]string, sess.rows),
+		Rows:   sess.rows,
+		Cols:   sess.cols,
+		Lines:  make([]string, sess.rows),
+		Cursor: screen.Position{Row: sess.curRow, Col: sess.curCol},
 	}
 
 	for i, row := range sess.buf {
@@ -100,10 +120,15 @@ func (m *Manager) Input(id string, data string) error {
 	return err
 }
 
-// WaitForText polls until the given text appears on screen or timeout.
+// WaitForText blocks until the given text appears on screen or timeout elapses.
 func (m *Manager) WaitForText(id string, text string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	sess, err := m.get(id)
+	if err != nil {
+		return err
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
 		snap, err := m.Screenshot(id)
 		if err != nil {
 			return err
@@ -113,34 +138,54 @@ func (m *Manager) WaitForText(id string, text string, timeout time.Duration) err
 				return nil
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-sess.updated:
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for %q after %s", text, timeout)
+		case <-sess.done:
+			return fmt.Errorf("session closed while waiting for %q", text)
+		}
 	}
-	return fmt.Errorf("timeout waiting for %q after %s", text, timeout)
 }
 
-// WaitForStable polls until the screen stops changing.
+// WaitForStable blocks until the screen stops changing for stable duration or timeout elapses.
 func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastSnap string
+	sess, err := m.get(id)
+	if err != nil {
+		return err
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	// Seed initial state so an already-stable screen returns success immediately.
+	initSnap, err := m.Screenshot(id)
+	if err != nil {
+		return err
+	}
+	lastSnap := initSnap.Text()
 	stableSince := time.Now()
 
-	for time.Now().Before(deadline) {
+	for {
+		if time.Since(stableSince) >= stable {
+			return nil
+		}
+		select {
+		case <-sess.updated:
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for screen stability after %s", timeout)
+		case <-sess.done:
+			return fmt.Errorf("session closed while waiting for stability")
+		}
 		snap, err := m.Screenshot(id)
 		if err != nil {
 			return err
 		}
 		current := snap.Text()
-		if current == lastSnap {
-			if time.Since(stableSince) >= stable {
-				return nil
-			}
-		} else {
+		if current != lastSnap {
 			lastSnap = current
 			stableSince = time.Now()
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("timeout waiting for screen stability after %s", timeout)
 }
 
 // Close terminates a session.
@@ -154,11 +199,17 @@ func (m *Manager) Close(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	sess.ptmx.Close()
+	sess.ptmx.Close()     // unblocks readLoop's Read()
+	sess.wg.Wait()        // wait for readLoop to exit
+	sess.once.Do(func() { // safe close of done channel
+		close(sess.done)
+	})
 	if sess.Cmd.Process != nil {
 		sess.Cmd.Process.Kill()
 	}
-	close(sess.done)
+	if sess.Cmd.Process != nil {
+		sess.Cmd.Wait()
+	}
 	return nil
 }
 
@@ -189,43 +240,64 @@ func (m *Manager) get(id string) (*Session, error) {
 // This is a simplified line-based parser. For full VT100 emulation,
 // swap in bubbleterm or go-vte.
 func (s *Session) readLoop() {
+	defer s.wg.Done()
+
 	buf := make([]byte, 4096)
-	row, col := 0, 0
 
 	for {
-		select {
-		case <-s.done:
-			return
-		default:
-		}
-
 		n, err := s.ptmx.Read(buf)
 		if err != nil {
 			return
 		}
 
-		s.mu.Lock()
+		// Copy current buffer state into a local working copy.
+		s.mu.RLock()
+		localBuf := make([][]rune, s.rows)
+		for i, r := range s.buf {
+			localBuf[i] = make([]rune, len(r))
+			copy(localBuf[i], r)
+		}
+		rows := s.rows
+		cols := s.cols
+		row := s.curRow
+		col := s.curCol
+		s.mu.RUnlock()
+
 		for _, b := range buf[:n] {
 			switch b {
 			case '\n':
 				row++
 				col = 0
-				if row >= s.rows {
+				if row >= rows {
 					// Scroll up
-					copy(s.buf, s.buf[1:])
-					s.buf[s.rows-1] = make([]rune, s.cols)
-					row = s.rows - 1
+					copy(localBuf, localBuf[1:])
+					localBuf[rows-1] = make([]rune, cols)
+					for j := range localBuf[rows-1] {
+						localBuf[rows-1][j] = ' '
+					}
+					row = rows - 1
 				}
 			case '\r':
 				col = 0
 			default:
-				if row < s.rows && col < s.cols {
-					s.buf[row][col] = rune(b)
+				if row < rows && col < cols {
+					localBuf[row][col] = rune(b)
 					col++
 				}
 			}
 		}
+
+		s.mu.Lock()
+		s.buf = localBuf
+		s.curRow = row
+		s.curCol = col
 		s.mu.Unlock()
+
+		// Non-blocking notify
+		select {
+		case s.updated <- struct{}{}:
+		default:
+		}
 	}
 }
 

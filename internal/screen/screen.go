@@ -1,20 +1,13 @@
 package screen
 
-// Cell represents a single character cell in the terminal grid.
-type Cell struct {
-	Char  string `json:"char"`
-	FG    string `json:"fg,omitempty"`
-	BG    string `json:"bg,omitempty"`
-	Bold  bool   `json:"bold,omitempty"`
-}
+import "strings"
 
 // Snapshot is a point-in-time capture of the terminal screen.
 type Snapshot struct {
-	Rows    int      `json:"rows"`
-	Cols    int      `json:"cols"`
-	Lines   []string `json:"lines"`
-	Grid    [][]Cell `json:"grid,omitempty"`
-	Cursor  Position `json:"cursor"`
+	Rows   int      `json:"rows"`
+	Cols   int      `json:"cols"`
+	Lines  []string `json:"lines"`
+	Cursor Position `json:"cursor"`
 }
 
 // Position represents cursor location.
@@ -25,12 +18,5 @@ type Position struct {
 
 // Text returns the screen content as a single string with newlines.
 func (s *Snapshot) Text() string {
-	out := ""
-	for i, line := range s.Lines {
-		out += line
-		if i < len(s.Lines)-1 {
-			out += "\n"
-		}
-	}
-	return out
+	return strings.Join(s.Lines, "\n")
 }

@@ -6,11 +6,15 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/tom/awn/internal/rpc"
 )
 
+// Dispatcher routes JSON-RPC method calls to their handlers.
+type Dispatcher interface {
+	Dispatch(method string, params json.RawMessage) (any, error)
+}
+
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
 }
 
 // JSONRPCRequest is a JSON-RPC 2.0 request.
@@ -37,13 +41,14 @@ type JSONRPCError struct {
 
 // Server serves JSON-RPC 2.0 over WebSocket.
 type Server struct {
-	handler *rpc.Handler
+	handler Dispatcher
 	addr    string
+	token   string
 }
 
 // NewServer creates a WebSocket JSON-RPC server.
-func NewServer(handler *rpc.Handler, addr string) *Server {
-	return &Server{handler: handler, addr: addr}
+func NewServer(d Dispatcher, addr string, token string) *Server {
+	return &Server{handler: d, addr: addr, token: token}
 }
 
 // ListenAndServe starts the WebSocket server.
@@ -60,6 +65,13 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if s.token != "" {
+		if r.Header.Get("Authorization") != "Bearer "+s.token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("websocket upgrade: %v", err)
@@ -89,7 +101,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		result, err := s.handler.Dispatch(req.Method, req.Params)
 		if err != nil {
-			s.sendError(conn, req.ID, -32603, err.Error())
+			log.Printf("dispatch %s: %v", req.Method, err)
+			s.sendError(conn, req.ID, -32603, "internal error")
 			continue
 		}
 
@@ -98,8 +111,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			Result:  result,
 			ID:      req.ID,
 		}
-		data, _ := json.Marshal(resp)
-		conn.WriteMessage(websocket.TextMessage, data)
+		data, err := json.Marshal(resp)
+		if err != nil {
+			log.Printf("marshal response: %v", err)
+			s.sendError(conn, req.ID, -32603, "internal error")
+			continue
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			log.Printf("write response: %v", err)
+			return
+		}
 	}
 }
 
@@ -109,6 +130,12 @@ func (s *Server) sendError(conn *websocket.Conn, id any, code int, msg string) {
 		Error:   &JSONRPCError{Code: code, Message: msg},
 		ID:      id,
 	}
-	data, _ := json.Marshal(resp)
-	conn.WriteMessage(websocket.TextMessage, data)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("marshal error response: %v", err)
+		return
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("write error response: %v", err)
+	}
 }

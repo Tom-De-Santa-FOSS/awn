@@ -13,12 +13,14 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":7600", "listen address")
+	addr := flag.String("addr", "127.0.0.1:7600", "listen address")
 	flag.Parse()
+
+	token := os.Getenv("AWN_TOKEN")
 
 	mgr := session.NewManager()
 	handler := rpc.NewHandler(mgr)
-	server := transport.NewServer(handler, *addr)
+	server := transport.NewServer(handler, *addr, token)
 
 	// Graceful shutdown
 	sig := make(chan os.Signal, 1)

@@ -9,6 +9,14 @@ import (
 	"github.com/tom/awn/internal/session"
 )
 
+// Dispatcher is the interface satisfied by Handler, for use by transport layers.
+type Dispatcher interface {
+	Dispatch(method string, params json.RawMessage) (any, error)
+}
+
+// Compile-time check that Handler implements Dispatcher.
+var _ Dispatcher = (*Handler)(nil)
+
 // Handler exposes session operations as RPC methods.
 type Handler struct {
 	mgr *session.Manager
@@ -157,6 +165,6 @@ func (h *Handler) Dispatch(method string, params json.RawMessage) (any, error) {
 		return h.List()
 
 	default:
-		return nil, fmt.Errorf("unknown method: %s", method)
+		return nil, fmt.Errorf("method not found: %s", method)
 	}
 }

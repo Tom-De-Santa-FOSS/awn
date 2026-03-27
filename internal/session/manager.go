@@ -68,8 +68,6 @@ func (m *Manager) Create(cfg Config) (string, error) {
 		ID:      id,
 		Cmd:     cmd,
 		ptmx:    ptmx,
-		rows:    cfg.Rows,
-		cols:    cfg.Cols,
 		term:    vt10x.New(vt10x.WithSize(cfg.Cols, cfg.Rows)),
 		done:    make(chan struct{}),
 		updated: make(chan struct{}, 1),
@@ -99,19 +97,19 @@ func (m *Manager) Screenshot(id string) (*screen.Snapshot, error) {
 	sess.term.Lock()
 	defer sess.term.Unlock()
 
+	cols, rows := sess.term.Size()
 	cursor := sess.term.Cursor()
 	snap := &screen.Snapshot{
-		Rows:   sess.rows,
-		Cols:   sess.cols,
-		Lines:  make([]string, sess.rows),
+		Rows:   rows,
+		Cols:   cols,
+		Lines:  make([]string, rows),
 		Cursor: screen.Position{Row: cursor.Y, Col: cursor.X},
 	}
 
-	for row := 0; row < sess.rows; row++ {
-		var line []rune
-		for col := 0; col < sess.cols; col++ {
-			cell := sess.term.Cell(col, row)
-			line = append(line, cell.Char)
+	line := make([]rune, cols)
+	for row := 0; row < rows; row++ {
+		for col := 0; col < cols; col++ {
+			line[col] = sess.term.Cell(col, row).Char
 		}
 		snap.Lines[row] = strings.TrimRight(string(line), " \x00")
 	}

@@ -21,13 +21,11 @@ type PTYStarter interface {
 	Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error)
 }
 
-// Session wraps a PTY process with terminal emulation.
+// Session wraps a PTY process with terminal emulation via vt10x.
 type Session struct {
 	ID      string
 	Cmd     *exec.Cmd
 	ptmx    *os.File
-	rows    int
-	cols    int
 	term    vt10x.Terminal
 	mu      sync.RWMutex
 	once    sync.Once      // protects done channel close

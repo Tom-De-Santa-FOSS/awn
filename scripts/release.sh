@@ -74,6 +74,9 @@ do_release() {
   ver="$(read_version)"
   local tag="v$ver"
 
+  $GIT_CMD add VERSION
+  $GIT_CMD commit -m "Bump version to $ver"
+
   build_all "$DIST_DIR"
 
   $GIT_CMD tag "$tag"

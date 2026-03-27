@@ -101,9 +101,11 @@ echo "Test: do_release patch creates tag and calls gh release"
   do_release patch
 
   assert_eq "version bumped to 0.0.1" "0.0.1" "$(cat VERSION)"
-  assert_eq "git tag created" "git tag v0.0.1" "$(sed -n '1p' "$MOCK_LOG")"
-  assert_eq "git push tag" "git push origin v0.0.1" "$(sed -n '2p' "$MOCK_LOG")"
-  assert_eq "gh release created" "gh release create v0.0.1 --title v0.0.1 --generate-notes" "$(sed -n '3p' "$MOCK_LOG")"
+  assert_eq "git add VERSION" "git add VERSION" "$(sed -n '1p' "$MOCK_LOG")"
+  assert_eq "git commit" "1" "$(grep -c 'git commit' "$MOCK_LOG" || echo 0)"
+  assert_eq "git tag created" "git tag v0.0.1" "$(sed -n '3p' "$MOCK_LOG")"
+  assert_eq "git push with tag" "git push origin v0.0.1" "$(sed -n '4p' "$MOCK_LOG")"
+  assert_eq "gh release created" "gh release create v0.0.1 --title v0.0.1 --generate-notes" "$(sed -n '5p' "$MOCK_LOG")"
 )
 
 # Test 6: do_release rejects invalid bump type

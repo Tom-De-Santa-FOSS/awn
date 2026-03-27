@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -59,22 +58,7 @@ func (s *Session) readLoop() {
 
 // Text returns the plain text content of the terminal screen.
 func (s *Session) Text() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	s.term.Lock()
-	defer s.term.Unlock()
-
-	cols, rows := s.term.Size()
-	line := make([]rune, cols)
-	var lines []string
-	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
-			line[col] = s.term.Cell(col, row).Char
-		}
-		lines = append(lines, strings.TrimRight(string(line), " \x00"))
-	}
-	return strings.Join(lines, "\n")
+	return s.Screen().Text()
 }
 
 // ContainsText checks if text appears on screen without building a full snapshot.
@@ -135,6 +119,9 @@ func (s *Session) WaitForStable(stable, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	tick := time.NewTicker(stable / 2)
+	defer tick.Stop()
+
 	lastText := s.Text()
 	stableSince := time.Now()
 
@@ -144,7 +131,12 @@ func (s *Session) WaitForStable(stable, timeout time.Duration) error {
 		}
 		select {
 		case <-s.updated:
+		case <-tick.C:
 		case <-timer.C:
+			// Final stability check before declaring timeout.
+			if time.Since(stableSince) >= stable {
+				return nil
+			}
 			return fmt.Errorf("timeout waiting for stability after %s", timeout)
 		case <-s.done:
 			return fmt.Errorf("session closed while waiting for stability")
@@ -221,10 +213,20 @@ func (s *Session) FindOne(strategy Strategy, match MatchFunc) (Element, error) {
 	return Element{}, fmt.Errorf("no matching element found")
 }
 
-// vt10x default colors: DefaultFG = 1<<24 (0x1000000), DefaultBG = 1<<24+1 (0x1000001)
+// vt10x default color sentinels (from vt10x source, unexported).
 const (
-	vt10xDefaultFG = 1 << 24
-	vt10xDefaultBG = 1<<24 + 1
+	vt10xDefaultFG = 1 << 24     // 0x1000000
+	vt10xDefaultBG = 1<<24 + 1   // 0x1000001
+)
+
+// vt10x Mode bit positions (from vt10x source, unexported).
+const (
+	vt10xModeReverse   = 1 << 0
+	vt10xModeUnderline = 1 << 1
+	vt10xModeBold      = 1 << 2
+	// bit 3 = gfx, not mapped
+	vt10xModeItalic = 1 << 4
+	vt10xModeBlink  = 1 << 5
 )
 
 // mapColor converts a vt10x color to awn Color.
@@ -236,24 +238,21 @@ func mapColor(c vt10x.Color) Color {
 	return Color(int32(v))
 }
 
-// vt10x Mode bit positions (from vt10x source, unexported):
-// reverse=0, underline=1, bold=2, gfx=3, italic=4, blink=5, wrap=6
 func mapAttrs(mode int16) Attr {
 	var a Attr
-	if mode&(1<<0) != 0 {
+	if mode&vt10xModeReverse != 0 {
 		a |= AttrReverse
 	}
-	if mode&(1<<1) != 0 {
+	if mode&vt10xModeUnderline != 0 {
 		a |= AttrUnderline
 	}
-	if mode&(1<<2) != 0 {
+	if mode&vt10xModeBold != 0 {
 		a |= AttrBold
 	}
-	// bit 3 = gfx, skip
-	if mode&(1<<4) != 0 {
+	if mode&vt10xModeItalic != 0 {
 		a |= AttrItalic
 	}
-	if mode&(1<<5) != 0 {
+	if mode&vt10xModeBlink != 0 {
 		a |= AttrBlink
 	}
 	return a
@@ -267,10 +266,6 @@ func (s *Session) SendKeys(data string) error {
 
 // Close terminates this session.
 func (s *Session) Close() error {
-	return s.close()
-}
-
-func (s *Session) close() error {
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}

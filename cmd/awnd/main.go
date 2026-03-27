@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/tom/awn"
+	"github.com/tom/awn/awtreestrategy"
 	"github.com/tom/awn/internal/rpc"
 	"github.com/tom/awn/internal/transport"
 )
@@ -19,7 +20,7 @@ func main() {
 	token := os.Getenv("AWN_TOKEN")
 
 	driver := awn.NewDriver()
-	handler := rpc.NewHandler(driver)
+	handler := rpc.NewHandler(driver, awtreestrategy.New())
 	server := transport.NewServer(handler, *addr, token)
 
 	sig := make(chan os.Signal, 1)

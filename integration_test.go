@@ -1,7 +1,8 @@
+//go:build integration
+
 package awn_test
 
 import (
-	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -81,19 +82,12 @@ func TestIntegration_LazygitDetectsElements(t *testing.T) {
 		t.Logf("no panel found via FindOne: %v", err)
 	}
 
-	// Print serialized output for human inspection.
+	// Log serialized output for human inspection.
 	for _, e := range elements {
-		fmt.Printf("[%s:%q", e.Type, e.Label)
+		label := e.Type + ":" + e.Label
 		if e.Focused {
-			fmt.Print("*")
+			label += "*"
 		}
-		fmt.Printf(" %d,%d", e.Bounds.Row, e.Bounds.Col)
-		if e.Bounds.Height > 1 {
-			fmt.Printf(" %dx%d", e.Bounds.Width, e.Bounds.Height)
-		} else if e.Bounds.Width > 0 {
-			fmt.Printf(" w%d", e.Bounds.Width)
-		}
-		fmt.Print("] ")
+		t.Logf("[%s %d,%d %dx%d]", label, e.Bounds.Row, e.Bounds.Col, e.Bounds.Width, e.Bounds.Height)
 	}
-	fmt.Println()
 }

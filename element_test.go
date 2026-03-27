@@ -25,3 +25,11 @@ func TestByType_MatchesElement(t *testing.T) {
 		t.Fatal("expected ByType to match element with same type")
 	}
 }
+
+func TestByType_DoesNotMatchDifferentType(t *testing.T) {
+	e := Element{Type: "panel"}
+	match := ByType("button")
+	if match(e) {
+		t.Fatal("expected ByType not to match element with different type")
+	}
+}

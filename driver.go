@@ -119,13 +119,21 @@ func (d *Driver) Close(id string) error {
 	delete(d.sessions, id)
 	d.mu.Unlock()
 
-	return sess.close()
+	return sess.Close()
 }
 
 // CloseAll terminates all active sessions.
 func (d *Driver) CloseAll() {
-	for _, id := range d.List() {
-		_ = d.Close(id)
+	d.mu.Lock()
+	sessions := make([]*Session, 0, len(d.sessions))
+	for _, sess := range d.sessions {
+		sessions = append(sessions, sess)
+	}
+	d.sessions = make(map[string]*Session)
+	d.mu.Unlock()
+
+	for _, sess := range sessions {
+		_ = sess.Close()
 	}
 }
 

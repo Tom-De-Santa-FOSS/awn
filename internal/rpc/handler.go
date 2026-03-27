@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/tom/awn"
-	"github.com/tom/awn/awtreestrategy"
 )
 
 // Dispatcher is the interface satisfied by Handler, for use by transport layers.
@@ -23,11 +22,11 @@ type Handler struct {
 	strategy awn.Strategy
 }
 
-// NewHandler creates an RPC handler backed by a Driver.
-func NewHandler(d *awn.Driver) *Handler {
+// NewHandler creates an RPC handler backed by a Driver and detection strategy.
+func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 	return &Handler{
 		driver:   d,
-		strategy: awtreestrategy.New(),
+		strategy: strategy,
 	}
 }
 

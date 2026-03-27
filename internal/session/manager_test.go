@@ -240,3 +240,42 @@ func TestANSI_CursorMovement(t *testing.T) {
 	}
 	t.Fatal("timed out: expected 'XY' at row 2 from ANSI cursor move")
 }
+
+// TestANSI_CursorPositionTracking verifies that cursor position in the
+// screenshot reflects ANSI cursor positioning commands.
+func TestANSI_CursorPositionTracking(t *testing.T) {
+	p := &pipePTY{}
+	m := NewManagerWithPTY(p)
+
+	id, err := m.Create(Config{Command: "true", Rows: 10, Cols: 20})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Move cursor to row 5, col 8 (1-based) then write "Z"
+	// After writing "Z", cursor should be at row 5, col 9 (1-based) = row 4, col 8 (0-based)
+	_, err = io.WriteString(p.W, "\x1b[5;8HZ")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := m.Screenshot(id)
+		if err != nil {
+			t.Fatalf("Screenshot: %v", err)
+		}
+		if len(snap.Lines) > 4 && strings.Contains(snap.Lines[4], "Z") {
+			// Cursor should be at (row=4, col=8) 0-based after writing "Z"
+			if snap.Cursor.Row != 4 {
+				t.Errorf("cursor row = %d, want 4", snap.Cursor.Row)
+			}
+			if snap.Cursor.Col != 8 {
+				t.Errorf("cursor col = %d, want 8", snap.Cursor.Col)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out: expected 'Z' at row 4 from ANSI cursor positioning")
+}

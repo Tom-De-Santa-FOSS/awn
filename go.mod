@@ -1,0 +1,9 @@
+module github.com/tom/awn
+
+go 1.26.1
+
+require (
+	github.com/creack/pty v1.1.24 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+)

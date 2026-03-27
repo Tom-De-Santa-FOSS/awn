@@ -2,6 +2,8 @@
 
 TUI automation for AI agents. Manage headless terminal sessions — screenshot, send input, detect UI elements, and wait on terminal state.
 
+<img src="https://skillicons.dev/icons?i=go" alt="Go" />
+
 ## Install
 
 ```bash

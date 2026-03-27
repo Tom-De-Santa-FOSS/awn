@@ -243,14 +243,15 @@ func (m *Manager) WaitForStable(id string, stable time.Duration, timeout time.Du
 	}
 }
 
-// Close terminates a session.
+// Close terminates a session. It atomically removes the session from the map
+// under the write lock to prevent TOCTOU races from concurrent Close calls.
 func (m *Manager) Close(id string) error {
-	sess, err := m.get(id)
-	if err != nil {
-		return err
-	}
-
 	m.mu.Lock()
+	sess, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", id)
+	}
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
@@ -273,9 +274,31 @@ func (m *Manager) Close(id string) error {
 }
 
 // CloseAll terminates all active sessions. Used for graceful shutdown.
+// Takes the write lock once, drains the map atomically, then tears down
+// sessions outside the lock to avoid repeated lock acquisitions.
 func (m *Manager) CloseAll() {
-	for _, id := range m.List() {
-		_ = m.Close(id)
+	m.mu.Lock()
+	sessions := make(map[string]*Session, len(m.sessions))
+	for id, sess := range m.sessions {
+		sessions[id] = sess
+	}
+	for id := range sessions {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+
+	for _, sess := range sessions {
+		if sess.Cmd.Process != nil {
+			_ = sess.Cmd.Process.Kill()
+		}
+		_ = sess.ptmx.Close()
+		sess.wg.Wait()
+		sess.once.Do(func() {
+			close(sess.done)
+		})
+		if sess.Cmd.Process != nil {
+			sess.Cmd.Process.Wait() //nolint:errcheck
+		}
 	}
 }
 

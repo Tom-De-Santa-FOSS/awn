@@ -9,11 +9,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TestPackageCompiles verifies the package builds and core functions are present.
-func TestPackageCompiles(t *testing.T) {
-	// If this file compiles, the package compiles.
-}
-
 // TestCallDialError verifies that call() returns a fatal error when the daemon
 // is not reachable. We use a helper that wraps the dial so we can test without
 // os.Exit.

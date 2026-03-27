@@ -54,10 +54,7 @@ func newTestServer(t *testing.T, d Dispatcher, token string) *httptest.Server {
 	s := NewServer(d, "", token)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleWS)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	mux.HandleFunc("/health", s.handleHealth)
 	return httptest.NewServer(mux)
 }
 

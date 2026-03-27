@@ -20,14 +20,70 @@ var _ Dispatcher = (*Handler)(nil)
 type Handler struct {
 	driver   *awn.Driver
 	strategy awn.Strategy
+	routes   map[string]func(json.RawMessage) (any, error)
 }
 
 // NewHandler creates an RPC handler backed by a Driver and detection strategy.
 func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
-	return &Handler{
+	h := &Handler{
 		driver:   d,
 		strategy: strategy,
 	}
+	h.routes = map[string]func(json.RawMessage) (any, error){
+		"create": func(p json.RawMessage) (any, error) {
+			var req CreateRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return h.Create(req)
+		},
+		"screenshot": func(p json.RawMessage) (any, error) {
+			var req IDRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return h.Screenshot(req)
+		},
+		"input": func(p json.RawMessage) (any, error) {
+			var req InputRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.Input(req)
+		},
+		"wait_for_text": func(p json.RawMessage) (any, error) {
+			var req WaitTextRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.WaitForText(req)
+		},
+		"wait_for_stable": func(p json.RawMessage) (any, error) {
+			var req WaitStableRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.WaitForStable(req)
+		},
+		"detect": func(p json.RawMessage) (any, error) {
+			var req IDRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return h.Detect(req)
+		},
+		"close": func(p json.RawMessage) (any, error) {
+			var req IDRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.Close(req)
+		},
+		"list": func(_ json.RawMessage) (any, error) {
+			return h.List()
+		},
+	}
+	return h
 }
 
 // --- Request/Response types ---
@@ -168,62 +224,29 @@ func (h *Handler) getSession(id string) *awn.Session {
 	return h.driver.Get(id)
 }
 
+// RPCError is a sentinel error type that carries a JSON-RPC error code.
+type RPCError struct {
+	Code int
+	Err  error
+}
+
+func (e *RPCError) Error() string { return e.Err.Error() }
+func (e *RPCError) Unwrap() error { return e.Err }
+
+// errBadParams wraps a params decode error with code -32602.
+func errBadParams(err error) *RPCError {
+	return &RPCError{Code: -32602, Err: fmt.Errorf("invalid params: %w", err)}
+}
+
 // Dispatch routes a JSON-RPC method name to the appropriate handler.
 func (h *Handler) Dispatch(method string, params json.RawMessage) (any, error) {
-	switch method {
-	case "create":
-		var req CreateRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return h.Create(req)
-
-	case "screenshot":
-		var req IDRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return h.Screenshot(req)
-
-	case "input":
-		var req InputRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return nil, h.Input(req)
-
-	case "wait_for_text":
-		var req WaitTextRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return nil, h.WaitForText(req)
-
-	case "wait_for_stable":
-		var req WaitStableRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return nil, h.WaitForStable(req)
-
-	case "detect":
-		var req IDRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return h.Detect(req)
-
-	case "close":
-		var req IDRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		return nil, h.Close(req)
-
-	case "list":
-		return h.List()
-
-	default:
-		return nil, fmt.Errorf("method not found: %s", method)
+	fn, ok := h.routes[method]
+	if !ok {
+		return nil, &RPCError{Code: -32601, Err: fmt.Errorf("method not found: %s", method)}
 	}
+	result, err := fn(params)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }

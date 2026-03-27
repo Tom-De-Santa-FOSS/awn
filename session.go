@@ -115,36 +115,39 @@ func (s *Session) WaitForText(text string, timeout time.Duration) error {
 }
 
 // WaitForStable blocks until the screen stops changing for the stable duration.
+// Only snapshots after an actual update signal to avoid unnecessary allocations.
 func (s *Session) WaitForStable(stable, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-
-	tick := time.NewTicker(stable / 2)
-	defer tick.Stop()
 
 	lastText := s.Text()
 	stableSince := time.Now()
 
 	for {
-		if time.Since(stableSince) >= stable {
+		remaining := stable - time.Since(stableSince)
+		if remaining <= 0 {
 			return nil
 		}
+		stableTimer := time.NewTimer(remaining)
 		select {
 		case <-s.updated:
-		case <-tick.C:
+			stableTimer.Stop()
+			txt := s.Text()
+			if txt != lastText {
+				lastText = txt
+				stableSince = time.Now()
+			}
+		case <-stableTimer.C:
+			return nil
 		case <-timer.C:
-			// Final stability check before declaring timeout.
+			stableTimer.Stop()
 			if time.Since(stableSince) >= stable {
 				return nil
 			}
 			return fmt.Errorf("timeout waiting for stability after %s", timeout)
 		case <-s.done:
+			stableTimer.Stop()
 			return fmt.Errorf("session closed while waiting for stability")
-		}
-		txt := s.Text()
-		if txt != lastText {
-			lastText = txt
-			stableSince = time.Now()
 		}
 	}
 }
@@ -213,7 +216,10 @@ func (s *Session) FindOne(strategy Strategy, match MatchFunc) (Element, error) {
 	return Element{}, fmt.Errorf("no matching element found")
 }
 
-// vt10x default color sentinels (from vt10x source, unexported).
+// vt10xDefaultFG and vt10xDefaultBG are sentinel values reverse-engineered from
+// unexported constants in the vt10x library. They are not part of any public
+// API contract and may silently break if vt10x changes its internal color
+// representation in a future release.
 const (
 	vt10xDefaultFG = 1 << 24     // 0x1000000
 	vt10xDefaultBG = 1<<24 + 1   // 0x1000001

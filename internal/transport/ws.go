@@ -3,12 +3,21 @@ package transport
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
+	"github.com/tom/awn/internal/rpc"
 )
+
+const maxConcurrentDispatches = 64
+
+// maxConcurrentConnections caps total simultaneous WebSocket connections.
+const maxConcurrentConnections = 10
 
 // Dispatcher routes JSON-RPC method calls to their handlers.
 type Dispatcher interface {
@@ -43,9 +52,10 @@ type JSONRPCError struct {
 
 // Server serves JSON-RPC 2.0 over WebSocket.
 type Server struct {
-	handler Dispatcher
-	addr    string
-	token   string
+	handler    Dispatcher
+	addr       string
+	token      string
+	activeConn atomic.Int32
 }
 
 // NewServer creates a WebSocket JSON-RPC server.
@@ -54,16 +64,38 @@ func NewServer(d Dispatcher, addr string, token string) *Server {
 }
 
 // ListenAndServe starts the WebSocket server.
+// It refuses to start without a token when the listen address is non-loopback.
 func (s *Server) ListenAndServe() error {
+	if s.token == "" {
+		host, _, err := net.SplitHostPort(s.addr)
+		if err == nil && host != "" && host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			return errors.New("AWN_TOKEN is required when listening on a non-loopback address")
+		}
+		if err == nil && host == "" {
+			// Empty host means 0.0.0.0 — refuse without token.
+			return errors.New("AWN_TOKEN is required when listening on all interfaces")
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleWS)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	mux.HandleFunc("/health", s.handleHealth)
 
 	log.Printf("awn daemon listening on %s", s.addr)
 	return http.ListenAndServe(s.addr, mux)
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.token != "" {
+		got := []byte(r.Header.Get("Authorization"))
+		want := []byte("Bearer " + s.token)
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -76,18 +108,25 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.activeConn.Load() >= maxConcurrentConnections {
+		http.Error(w, "too many connections", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("websocket upgrade: %v", err)
 		return
 	}
+	s.activeConn.Add(1)
+	defer s.activeConn.Add(-1)
 	defer conn.Close() //nolint:errcheck
 
 	log.Printf("client connected: %s", conn.RemoteAddr())
 
 	var wmu sync.Mutex // protects conn.WriteMessage
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 64) // cap in-flight dispatches per connection
+	sem := make(chan struct{}, maxConcurrentDispatches) // cap in-flight dispatches per connection
 
 	defer wg.Wait() // wait for in-flight handlers before conn.Close
 
@@ -113,7 +152,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		sem <- struct{}{} // backpressure: block if 64 handlers in-flight
+		sem <- struct{}{} // backpressure: block if maxConcurrentDispatches handlers in-flight
 		wg.Add(1)
 		go func(req JSONRPCRequest) {
 			defer wg.Done()
@@ -126,7 +165,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 			if err != nil {
 				log.Printf("dispatch %s: %v", req.Method, err)
-				s.sendError(conn, req.ID, -32603, "internal error")
+				code := -32603
+				msg := "internal error"
+				var rpcErr *rpc.RPCError
+				if errors.As(err, &rpcErr) {
+					code = rpcErr.Code
+					msg = rpcErr.Err.Error()
+				}
+				s.sendError(conn, req.ID, code, msg)
 				return
 			}
 

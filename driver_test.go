@@ -416,10 +416,10 @@ func TestDriver_CloseAll_ClosesAllSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session: %v", err)
 	}
-	// Need a new pipe for the second session.
-	p2 := &pipePTY{}
-	d2 := NewDriver(WithPTY(p2))
-	_, err = d2.Session("true")
+	// Create a second session in the same driver. pipePTY.Start creates a fresh
+	// pipe per call, overwriting p.W, which is fine — we only need both
+	// sessions registered in d.
+	_, err = d.Session("true")
 	if err != nil {
 		t.Fatalf("Session: %v", err)
 	}

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -215,6 +216,21 @@ func TestInferState_CursorMidContent_ReturnsActive(t *testing.T) {
 	state := inferState(scr)
 	if state != "active" {
 		t.Fatalf("expected active, got %q", state)
+	}
+}
+
+func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
+	h := newTestHandler()
+	// All three formats should be accepted (session-not-found error, not invalid-params).
+	for _, format := range []string{"text", "structured", "full"} {
+		params := fmt.Sprintf(`{"id":"nonexistent","format":%q}`, format)
+		_, err := h.Dispatch("screenshot", json.RawMessage(params))
+		if err == nil {
+			t.Fatalf("format=%s: expected error, got nil", format)
+		}
+		if strings.Contains(err.Error(), "invalid params") {
+			t.Fatalf("format=%s: rejected format param: %v", format, err)
+		}
 	}
 }
 

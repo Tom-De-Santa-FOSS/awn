@@ -20,7 +20,7 @@ import (
 func newServer(d rpc.Dispatcher) *server.MCPServer {
 	s := server.NewMCPServer("awn", "0.1.0")
 
-	dispatch := func(ctx context.Context, method string, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	dispatch := func(_ context.Context, method string, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		raw, err := json.Marshal(req.GetArguments())
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil

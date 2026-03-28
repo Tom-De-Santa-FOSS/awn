@@ -38,7 +38,7 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 			return h.Create(req)
 		},
 		"screenshot": func(p json.RawMessage) (any, error) {
-			var req IDRequest
+			var req ScreenshotRequest
 			if err := json.Unmarshal(p, &req); err != nil {
 				return nil, errBadParams(err)
 			}
@@ -124,11 +124,36 @@ type ListResponse struct {
 	Sessions []string `json:"sessions"`
 }
 
+type ScreenshotRequest struct {
+	ID     string `json:"id"`
+	Format string `json:"format,omitempty"`
+}
+
 type ScreenResponse struct {
-	Rows   int         `json:"rows"`
-	Cols   int         `json:"cols"`
-	Lines  []string    `json:"lines"`
-	Cursor awn.Position `json:"cursor"`
+	Rows     int          `json:"rows"`
+	Cols     int          `json:"cols"`
+	Lines    []string     `json:"lines,omitempty"`
+	Cursor   awn.Position `json:"cursor"`
+	Elements []awn.Element `json:"elements,omitempty"`
+}
+
+// buildScreenResponse constructs a ScreenResponse based on the requested format.
+func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element) *ScreenResponse {
+	resp := &ScreenResponse{
+		Rows:   scr.Rows,
+		Cols:   scr.Cols,
+		Cursor: scr.Cursor,
+	}
+	switch format {
+	case "structured":
+		resp.Elements = elements
+	case "full":
+		resp.Lines = scr.Lines()
+		resp.Elements = elements
+	default:
+		resp.Lines = scr.Lines()
+	}
+	return resp
 }
 
 type DetectResponse struct {
@@ -150,19 +175,20 @@ func (h *Handler) Create(req CreateRequest) (*CreateResponse, error) {
 	return &CreateResponse{ID: s.ID}, nil
 }
 
-func (h *Handler) Screenshot(req IDRequest) (*ScreenResponse, error) {
+func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
 		return nil, fmt.Errorf("session %q not found", req.ID)
 	}
 
 	scr := sess.Screen()
-	return &ScreenResponse{
-		Rows:   scr.Rows,
-		Cols:   scr.Cols,
-		Lines:  scr.Lines(),
-		Cursor: scr.Cursor,
-	}, nil
+
+	var elements []awn.Element
+	if req.Format == "structured" || req.Format == "full" {
+		elements = sess.FindAll(h.strategy)
+	}
+
+	return buildScreenResponse(scr, req.Format, elements), nil
 }
 
 func (h *Handler) Input(req InputRequest) error {

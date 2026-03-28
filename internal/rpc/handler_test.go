@@ -13,6 +13,13 @@ type stubStrategy struct{}
 
 func (stubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
 
+// fakeStrategy returns canned elements for format tests.
+type fakeStrategy struct {
+	elements []awn.Element
+}
+
+func (f fakeStrategy) Detect(_ *awn.Screen) []awn.Element { return f.elements }
+
 func newTestHandler() *Handler {
 	d := awn.NewDriver()
 	return NewHandler(d, stubStrategy{})
@@ -97,5 +104,65 @@ func TestDispatch_CloseNotFound(t *testing.T) {
 	_, err := h.Dispatch("close", json.RawMessage(`{"id":"nonexistent"}`))
 	if err == nil {
 		t.Fatalf("expected error for nonexistent session, got nil")
+	}
+}
+
+func testScreen() *awn.Screen {
+	cells := make([][]awn.Cell, 2)
+	for r := range cells {
+		cells[r] = make([]awn.Cell, 10)
+		for c := range cells[r] {
+			cells[r][c] = awn.Cell{Char: ' ', FG: awn.DefaultColor, BG: awn.DefaultColor}
+		}
+	}
+	for i, ch := range "hello" {
+		cells[0][i].Char = ch
+	}
+	return &awn.Screen{Rows: 2, Cols: 10, Cells: cells}
+}
+
+func TestBuildScreenResponse_DefaultFormat_ReturnsLinesNoElements(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "", nil)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for default format")
+	}
+	if resp.Elements != nil {
+		t.Fatal("expected no elements for default format")
+	}
+}
+
+func TestBuildScreenResponse_TextFormat_ReturnsLinesNoElements(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "text", nil)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for text format")
+	}
+	if resp.Elements != nil {
+		t.Fatal("expected no elements for text format")
+	}
+}
+
+func TestBuildScreenResponse_StructuredFormat_ReturnsElementsNoLines(t *testing.T) {
+	scr := testScreen()
+	elems := []awn.Element{{Type: "button", Label: "OK"}}
+	resp := buildScreenResponse(scr, "structured", elems)
+	if resp.Lines != nil {
+		t.Fatal("expected no lines for structured format")
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Label != "OK" {
+		t.Fatalf("expected 1 element with label OK, got %v", resp.Elements)
+	}
+}
+
+func TestBuildScreenResponse_FullFormat_ReturnsBoth(t *testing.T) {
+	scr := testScreen()
+	elems := []awn.Element{{Type: "button", Label: "Save"}}
+	resp := buildScreenResponse(scr, "full", elems)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for full format")
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Label != "Save" {
+		t.Fatalf("expected 1 element with label Save, got %v", resp.Elements)
 	}
 }

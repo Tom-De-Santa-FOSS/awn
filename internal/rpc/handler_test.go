@@ -219,6 +219,50 @@ func TestInferState_CursorMidContent_ReturnsActive(t *testing.T) {
 	}
 }
 
+func TestScreenResponse_JSON_OmitsEmptyFields(t *testing.T) {
+	// Text format: lines present, elements/state omitted.
+	resp := ScreenResponse{
+		Rows:   2,
+		Cols:   10,
+		Lines:  []string{"hello", ""},
+		Cursor: awn.Position{Row: 0, Col: 5},
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if strings.Contains(s, "elements") {
+		t.Fatalf("text response should omit elements, got: %s", s)
+	}
+	if strings.Contains(s, "state") {
+		t.Fatalf("text response should omit state, got: %s", s)
+	}
+
+	// Structured format: elements present, lines omitted.
+	resp2 := ScreenResponse{
+		Rows:     2,
+		Cols:     10,
+		Cursor:   awn.Position{Row: 0, Col: 0},
+		Elements: []awn.Element{{Type: "button", Label: "OK"}},
+		State:    "idle",
+	}
+	data2, err := json.Marshal(resp2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2 := string(data2)
+	if strings.Contains(s2, "lines") {
+		t.Fatalf("structured response should omit lines, got: %s", s2)
+	}
+	if !strings.Contains(s2, `"elements"`) {
+		t.Fatalf("structured response should include elements, got: %s", s2)
+	}
+	if !strings.Contains(s2, `"state"`) {
+		t.Fatalf("structured response should include state, got: %s", s2)
+	}
+}
+
 func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
 	h := newTestHandler()
 	// All three formats should be accepted (session-not-found error, not invalid-params).

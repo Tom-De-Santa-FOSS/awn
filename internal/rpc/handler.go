@@ -306,10 +306,10 @@ func (h *Handler) List() (*ListResponse, error) {
 	return &ListResponse{Sessions: h.driver.List()}, nil
 }
 
-// Subscribe starts a goroutine that watches for screen updates on the given session
+// SubscribeSession starts a goroutine that watches for screen updates on the given session
 // and calls notify with a JSON-encoded ScreenResponse for each update.
 // Returns the subscriber ID for later Unsubscribe calls.
-func (h *Handler) Subscribe(req SubscribeRequest, notify NotifyFunc) (string, error) {
+func (h *Handler) SubscribeSession(req SubscribeRequest, notify NotifyFunc) (string, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
 		return "", fmt.Errorf("session %q not found", req.ID)
@@ -350,6 +350,11 @@ func (h *Handler) Subscribe(req SubscribeRequest, notify NotifyFunc) (string, er
 	}()
 
 	return subID, nil
+}
+
+// Subscribe implements the transport.Subscriber interface.
+func (h *Handler) Subscribe(sessionID string, notify func(json.RawMessage)) (string, error) {
+	return h.SubscribeSession(SubscribeRequest{ID: sessionID}, NotifyFunc(notify))
 }
 
 // Unsubscribe stops a subscription by session and subscriber ID.

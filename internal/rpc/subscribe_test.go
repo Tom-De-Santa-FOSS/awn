@@ -44,7 +44,7 @@ func TestHandler_Subscribe_returns_subscriber_id(t *testing.T) {
 		mu.Unlock()
 	}
 
-	subID, err := h.Subscribe(SubscribeRequest{ID: s.ID}, notify)
+	subID, err := h.SubscribeSession(SubscribeRequest{ID: s.ID}, notify)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestHandler_Subscribe_sends_notification_on_screen_update(t *testing.T) {
 		}
 	}
 
-	subID, err := h.Subscribe(SubscribeRequest{ID: s.ID}, notify)
+	subID, err := h.SubscribeSession(SubscribeRequest{ID: s.ID}, notify)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestHandler_Subscribe_nonexistent_session_returns_error(t *testing.T) {
 	d := awn.NewDriver()
 	h := NewHandler(d, stubStrategy{})
 
-	_, err := h.Subscribe(SubscribeRequest{ID: "nonexistent"}, func(json.RawMessage) {})
+	_, err := h.SubscribeSession(SubscribeRequest{ID: "nonexistent"}, func(json.RawMessage) {})
 	if err == nil {
 		t.Fatal("expected error for nonexistent session")
 	}

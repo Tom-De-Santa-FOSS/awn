@@ -95,6 +95,12 @@ func main() {
 		result := call(addr, "list", nil)
 		fmt.Println(result)
 
+	case "watch":
+		if len(os.Args) < 3 {
+			fatal("usage: awn watch <session-id>")
+		}
+		watch(addr, os.Args[2])
+
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		usage()
@@ -165,6 +171,7 @@ Commands:
   awn wait <id> <text>               Wait for text to appear
   awn close <id>                     Terminate session
   awn list                           List active sessions
+  awn watch <id>                     Watch session screen in real-time
 
 Environment:
   AWN_ADDR    Daemon address (default: ws://localhost:7600)

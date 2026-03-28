@@ -207,3 +207,24 @@ func TestInferState_EmptyScreen_ReturnsIdle(t *testing.T) {
 		t.Fatalf("expected idle, got %q", state)
 	}
 }
+
+func TestInferState_CursorMidContent_ReturnsActive(t *testing.T) {
+	scr := testScreen()
+	// "hello" on row 0, cursor in the middle of content
+	scr.Cursor = awn.Position{Row: 0, Col: 3}
+	state := inferState(scr)
+	if state != "active" {
+		t.Fatalf("expected active, got %q", state)
+	}
+}
+
+func TestInferState_ColonPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	// vim-style ":" prompt
+	scr.Cells[1][0].Char = ':'
+	scr.Cursor = awn.Position{Row: 1, Col: 1}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}

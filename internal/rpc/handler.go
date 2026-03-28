@@ -139,7 +139,7 @@ type ScreenResponse struct {
 }
 
 // promptSuffixes are line endings that indicate a shell/REPL waiting for input.
-var promptSuffixes = []string{"$ ", "# ", "> ", "% ", ">>> ", "... "}
+var promptSuffixes = []string{"$ ", "# ", "> ", "% ", ">>> ", "... ", ":"}
 
 // inferState guesses whether the terminal is idle, active, or waiting for input.
 func inferState(scr *awn.Screen) string {
@@ -151,8 +151,13 @@ func inferState(scr *awn.Screen) string {
 
 	// Extract text before cursor on the cursor row.
 	before := make([]rune, curCol)
+	hasContent := false
 	for c := range curCol {
-		before[c] = scr.Cells[curRow][c].Char
+		ch := scr.Cells[curRow][c].Char
+		before[c] = ch
+		if ch != ' ' && ch != 0 {
+			hasContent = true
+		}
 	}
 	line := string(before)
 
@@ -160,6 +165,11 @@ func inferState(scr *awn.Screen) string {
 		if len(line) >= len(suffix) && line[len(line)-len(suffix):] == suffix {
 			return "waiting_for_input"
 		}
+	}
+
+	// If cursor is positioned after non-whitespace content, something is running.
+	if hasContent {
+		return "active"
 	}
 	return "idle"
 }

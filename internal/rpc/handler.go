@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tom/awn"
@@ -38,7 +39,7 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 			return h.Create(req)
 		},
 		"screenshot": func(p json.RawMessage) (any, error) {
-			var req IDRequest
+			var req ScreenshotRequest
 			if err := json.Unmarshal(p, &req); err != nil {
 				return nil, errBadParams(err)
 			}
@@ -124,11 +125,79 @@ type ListResponse struct {
 	Sessions []string `json:"sessions"`
 }
 
+type ScreenshotRequest struct {
+	ID     string `json:"id"`
+	Format string `json:"format,omitempty"`
+}
+
 type ScreenResponse struct {
-	Rows   int         `json:"rows"`
-	Cols   int         `json:"cols"`
-	Lines  []string    `json:"lines"`
-	Cursor awn.Position `json:"cursor"`
+	Rows     int           `json:"rows"`
+	Cols     int           `json:"cols"`
+	Lines    []string      `json:"lines,omitempty"`
+	Cursor   awn.Position  `json:"cursor"`
+	Elements []awn.Element `json:"elements,omitempty"`
+	State    string        `json:"state,omitempty"`
+}
+
+// promptSuffixes are line endings that indicate a shell/REPL waiting for input.
+var promptSuffixes = []string{"$ ", "# ", "> ", "% ", ">>> ", "... ", ":"}
+
+// inferState guesses whether the terminal is idle, active, or waiting for input.
+func inferState(scr *awn.Screen) string {
+	curRow := scr.Cursor.Row
+	curCol := scr.Cursor.Col
+	if curRow < 0 || curRow >= scr.Rows || curCol > scr.Cols {
+		return "idle"
+	}
+	if curCol <= 0 {
+		return "idle"
+	}
+
+	// Extract text before cursor on the cursor row.
+	before := make([]rune, curCol)
+	hasContent := false
+	for c := range curCol {
+		ch := scr.Cells[curRow][c].Char
+		before[c] = ch
+		if ch != ' ' && ch != 0 {
+			hasContent = true
+		}
+	}
+	line := string(before)
+
+	for _, suffix := range promptSuffixes {
+		if strings.HasSuffix(line, suffix) {
+			return "waiting_for_input"
+		}
+	}
+
+	// If cursor is positioned after non-whitespace content, something is running.
+	if hasContent {
+		return "active"
+	}
+	return "idle"
+}
+
+// buildScreenResponse constructs a ScreenResponse based on the requested format.
+func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element) *ScreenResponse {
+	resp := &ScreenResponse{
+		Rows:   scr.Rows,
+		Cols:   scr.Cols,
+		Cursor: scr.Cursor,
+	}
+	switch format {
+	case "structured":
+		resp.Elements = elements
+	case "full":
+		resp.Lines = scr.Lines()
+		resp.Elements = elements
+	default:
+		resp.Lines = scr.Lines()
+	}
+	if format == "structured" || format == "full" {
+		resp.State = inferState(scr)
+	}
+	return resp
 }
 
 type DetectResponse struct {
@@ -150,19 +219,20 @@ func (h *Handler) Create(req CreateRequest) (*CreateResponse, error) {
 	return &CreateResponse{ID: s.ID}, nil
 }
 
-func (h *Handler) Screenshot(req IDRequest) (*ScreenResponse, error) {
+func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
 		return nil, fmt.Errorf("session %q not found", req.ID)
 	}
 
 	scr := sess.Screen()
-	return &ScreenResponse{
-		Rows:   scr.Rows,
-		Cols:   scr.Cols,
-		Lines:  scr.Lines(),
-		Cursor: scr.Cursor,
-	}, nil
+
+	var elements []awn.Element
+	if req.Format == "structured" || req.Format == "full" {
+		elements = sess.FindAll(h.strategy)
+	}
+
+	return buildScreenResponse(scr, req.Format, elements), nil
 }
 
 func (h *Handler) Input(req InputRequest) error {

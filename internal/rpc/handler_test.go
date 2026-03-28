@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,6 +13,13 @@ import (
 type stubStrategy struct{}
 
 func (stubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
+
+// fakeStrategy returns canned elements for format tests.
+type fakeStrategy struct {
+	elements []awn.Element
+}
+
+func (f fakeStrategy) Detect(_ *awn.Screen) []awn.Element { return f.elements }
 
 func newTestHandler() *Handler {
 	d := awn.NewDriver()
@@ -97,5 +105,228 @@ func TestDispatch_CloseNotFound(t *testing.T) {
 	_, err := h.Dispatch("close", json.RawMessage(`{"id":"nonexistent"}`))
 	if err == nil {
 		t.Fatalf("expected error for nonexistent session, got nil")
+	}
+}
+
+func testScreen() *awn.Screen {
+	cells := make([][]awn.Cell, 2)
+	for r := range cells {
+		cells[r] = make([]awn.Cell, 10)
+		for c := range cells[r] {
+			cells[r][c] = awn.Cell{Char: ' ', FG: awn.DefaultColor, BG: awn.DefaultColor}
+		}
+	}
+	for i, ch := range "hello" {
+		cells[0][i].Char = ch
+	}
+	return &awn.Screen{Rows: 2, Cols: 10, Cells: cells}
+}
+
+func TestBuildScreenResponse_DefaultFormat_ReturnsLinesNoElements(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "", nil)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for default format")
+	}
+	if resp.Elements != nil {
+		t.Fatal("expected no elements for default format")
+	}
+	if resp.State != "" {
+		t.Fatalf("expected empty state for text format, got %q", resp.State)
+	}
+}
+
+func TestBuildScreenResponse_StructuredFormat_IncludesState(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "structured", nil)
+	if resp.State != "idle" {
+		t.Fatalf("expected idle state, got %q", resp.State)
+	}
+}
+
+func TestBuildScreenResponse_FullFormat_IncludesState(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "full", nil)
+	if resp.State != "idle" {
+		t.Fatalf("expected idle state, got %q", resp.State)
+	}
+}
+
+func TestBuildScreenResponse_TextFormat_ReturnsLinesNoElements(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "text", nil)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for text format")
+	}
+	if resp.Elements != nil {
+		t.Fatal("expected no elements for text format")
+	}
+}
+
+func TestBuildScreenResponse_StructuredFormat_ReturnsElementsNoLines(t *testing.T) {
+	scr := testScreen()
+	elems := []awn.Element{{Type: "button", Label: "OK"}}
+	resp := buildScreenResponse(scr, "structured", elems)
+	if resp.Lines != nil {
+		t.Fatal("expected no lines for structured format")
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Label != "OK" {
+		t.Fatalf("expected 1 element with label OK, got %v", resp.Elements)
+	}
+}
+
+func TestBuildScreenResponse_FullFormat_ReturnsBoth(t *testing.T) {
+	scr := testScreen()
+	elems := []awn.Element{{Type: "button", Label: "Save"}}
+	resp := buildScreenResponse(scr, "full", elems)
+	if resp.Lines == nil {
+		t.Fatal("expected lines for full format")
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Label != "Save" {
+		t.Fatalf("expected 1 element with label Save, got %v", resp.Elements)
+	}
+}
+
+func TestInferState_CursorAtPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	// Put a "$ " prompt before cursor position
+	for i, ch := range "$ " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestInferState_EmptyScreen_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 0, Col: 0}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
+	}
+}
+
+func TestInferState_CursorMidContent_ReturnsActive(t *testing.T) {
+	scr := testScreen()
+	// "hello" on row 0, cursor in the middle of content
+	scr.Cursor = awn.Position{Row: 0, Col: 3}
+	state := inferState(scr)
+	if state != "active" {
+		t.Fatalf("expected active, got %q", state)
+	}
+}
+
+func TestScreenResponse_JSON_TextFormat_OmitsElementsAndState(t *testing.T) {
+	resp := ScreenResponse{
+		Rows:   2,
+		Cols:   10,
+		Lines:  []string{"hello", ""},
+		Cursor: awn.Position{Row: 0, Col: 5},
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if strings.Contains(s, "elements") {
+		t.Fatalf("text response should omit elements, got: %s", s)
+	}
+	if strings.Contains(s, "state") {
+		t.Fatalf("text response should omit state, got: %s", s)
+	}
+}
+
+func TestScreenResponse_JSON_StructuredFormat_OmitsLines(t *testing.T) {
+	resp := ScreenResponse{
+		Rows:     2,
+		Cols:     10,
+		Cursor:   awn.Position{Row: 0, Col: 0},
+		Elements: []awn.Element{{Type: "button", Label: "OK"}},
+		State:    "idle",
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if strings.Contains(s, "lines") {
+		t.Fatalf("structured response should omit lines, got: %s", s)
+	}
+	if !strings.Contains(s, `"elements"`) {
+		t.Fatalf("structured response should include elements, got: %s", s)
+	}
+	if !strings.Contains(s, `"state"`) {
+		t.Fatalf("structured response should include state, got: %s", s)
+	}
+}
+
+func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
+	h := newTestHandler()
+	// All three formats should be accepted (session-not-found error, not invalid-params).
+	for _, format := range []string{"text", "structured", "full"} {
+		params := fmt.Sprintf(`{"id":"nonexistent","format":%q}`, format)
+		_, err := h.Dispatch("screenshot", json.RawMessage(params))
+		if err == nil {
+			t.Fatalf("format=%s: expected error, got nil", format)
+		}
+		if strings.Contains(err.Error(), "invalid params") {
+			t.Fatalf("format=%s: rejected format param: %v", format, err)
+		}
+	}
+}
+
+func TestInferState_CursorRowOutOfBounds_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 5, Col: 3}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
+	}
+}
+
+func TestInferState_CursorColOutOfBounds_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 0, Col: 99}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
+	}
+}
+
+func TestInferState_HashPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	for i, ch := range "# " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestInferState_PercentPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	for i, ch := range "% " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestInferState_ColonPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	// vim-style ":" prompt
+	scr.Cells[1][0].Char = ':'
+	scr.Cursor = awn.Position{Row: 1, Col: 1}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
 	}
 }

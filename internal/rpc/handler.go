@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tom/awn"
@@ -145,7 +146,10 @@ var promptSuffixes = []string{"$ ", "# ", "> ", "% ", ">>> ", "... ", ":"}
 func inferState(scr *awn.Screen) string {
 	curRow := scr.Cursor.Row
 	curCol := scr.Cursor.Col
-	if curRow < 0 || curRow >= scr.Rows || curCol <= 0 {
+	if curRow < 0 || curRow >= scr.Rows || curCol > scr.Cols {
+		return "idle"
+	}
+	if curCol <= 0 {
 		return "idle"
 	}
 
@@ -162,7 +166,7 @@ func inferState(scr *awn.Screen) string {
 	line := string(before)
 
 	for _, suffix := range promptSuffixes {
-		if len(line) >= len(suffix) && line[len(line)-len(suffix):] == suffix {
+		if strings.HasSuffix(line, suffix) {
 			return "waiting_for_input"
 		}
 	}
@@ -184,13 +188,14 @@ func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element)
 	switch format {
 	case "structured":
 		resp.Elements = elements
-		resp.State = inferState(scr)
 	case "full":
 		resp.Lines = scr.Lines()
 		resp.Elements = elements
-		resp.State = inferState(scr)
 	default:
 		resp.Lines = scr.Lines()
+	}
+	if format == "structured" || format == "full" {
+		resp.State = inferState(scr)
 	}
 	return resp
 }

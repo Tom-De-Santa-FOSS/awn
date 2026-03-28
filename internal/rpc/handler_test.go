@@ -219,8 +219,7 @@ func TestInferState_CursorMidContent_ReturnsActive(t *testing.T) {
 	}
 }
 
-func TestScreenResponse_JSON_OmitsEmptyFields(t *testing.T) {
-	// Text format: lines present, elements/state omitted.
+func TestScreenResponse_JSON_TextFormat_OmitsElementsAndState(t *testing.T) {
 	resp := ScreenResponse{
 		Rows:   2,
 		Cols:   10,
@@ -238,28 +237,29 @@ func TestScreenResponse_JSON_OmitsEmptyFields(t *testing.T) {
 	if strings.Contains(s, "state") {
 		t.Fatalf("text response should omit state, got: %s", s)
 	}
+}
 
-	// Structured format: elements present, lines omitted.
-	resp2 := ScreenResponse{
+func TestScreenResponse_JSON_StructuredFormat_OmitsLines(t *testing.T) {
+	resp := ScreenResponse{
 		Rows:     2,
 		Cols:     10,
 		Cursor:   awn.Position{Row: 0, Col: 0},
 		Elements: []awn.Element{{Type: "button", Label: "OK"}},
 		State:    "idle",
 	}
-	data2, err := json.Marshal(resp2)
+	data, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2 := string(data2)
-	if strings.Contains(s2, "lines") {
-		t.Fatalf("structured response should omit lines, got: %s", s2)
+	s := string(data)
+	if strings.Contains(s, "lines") {
+		t.Fatalf("structured response should omit lines, got: %s", s)
 	}
-	if !strings.Contains(s2, `"elements"`) {
-		t.Fatalf("structured response should include elements, got: %s", s2)
+	if !strings.Contains(s, `"elements"`) {
+		t.Fatalf("structured response should include elements, got: %s", s)
 	}
-	if !strings.Contains(s2, `"state"`) {
-		t.Fatalf("structured response should include state, got: %s", s2)
+	if !strings.Contains(s, `"state"`) {
+		t.Fatalf("structured response should include state, got: %s", s)
 	}
 }
 
@@ -275,6 +275,48 @@ func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
 		if strings.Contains(err.Error(), "invalid params") {
 			t.Fatalf("format=%s: rejected format param: %v", format, err)
 		}
+	}
+}
+
+func TestInferState_CursorRowOutOfBounds_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 5, Col: 3}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
+	}
+}
+
+func TestInferState_CursorColOutOfBounds_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 0, Col: 99}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
+	}
+}
+
+func TestInferState_HashPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	for i, ch := range "# " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestInferState_PercentPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	for i, ch := range "% " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
 	}
 }
 

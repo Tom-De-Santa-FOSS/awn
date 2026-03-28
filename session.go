@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hinshun/vt10x"
 )
 
@@ -19,8 +20,10 @@ type Session struct {
 	mu      sync.RWMutex
 	once    sync.Once
 	wg      sync.WaitGroup
-	done    chan struct{}
-	updated chan struct{}
+	done          chan struct{}
+	updated       chan struct{}
+	subscribers   map[string]chan struct{}
+	subscribersMu sync.RWMutex
 }
 
 // readBufPool reuses 32KB read buffers.
@@ -53,6 +56,7 @@ func (s *Session) readLoop() {
 		case s.updated <- struct{}{}:
 		default:
 		}
+		s.notifySubscribers()
 	}
 }
 
@@ -262,6 +266,40 @@ func mapAttrs(mode int16) Attr {
 		a |= AttrBlink
 	}
 	return a
+}
+
+// Subscribe creates a new subscriber channel that fires on screen updates.
+// Returns a subscriber ID and a buffered(1) channel.
+func (s *Session) Subscribe() (string, <-chan struct{}) {
+	s.subscribersMu.Lock()
+	defer s.subscribersMu.Unlock()
+
+	id := uuid.NewString()
+	ch := make(chan struct{}, 1)
+	if s.subscribers == nil {
+		s.subscribers = make(map[string]chan struct{})
+	}
+	s.subscribers[id] = ch
+	return id, ch
+}
+
+// Unsubscribe removes a subscriber by ID.
+func (s *Session) Unsubscribe(id string) {
+	s.subscribersMu.Lock()
+	defer s.subscribersMu.Unlock()
+	delete(s.subscribers, id)
+}
+
+// notifySubscribers sends a non-blocking signal to all subscriber channels.
+func (s *Session) notifySubscribers() {
+	s.subscribersMu.RLock()
+	defer s.subscribersMu.RUnlock()
+	for _, ch := range s.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // SendKeys writes input to the session's PTY.

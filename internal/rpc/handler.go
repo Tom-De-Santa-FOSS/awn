@@ -4,10 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tom/awn"
 )
+
+// NotifyFunc is a callback for sending push notifications to a client.
+type NotifyFunc func(data json.RawMessage)
+
+// SubscribeRequest is the params for the subscribe method.
+type SubscribeRequest struct {
+	ID string `json:"id"`
+}
+
+// subscription tracks an active screen update subscription.
+type subscription struct {
+	sessionID string
+	subID     string
+	stop      chan struct{}
+}
 
 // Dispatcher is the interface satisfied by Handler, for use by transport layers.
 type Dispatcher interface {
@@ -19,9 +35,11 @@ var _ Dispatcher = (*Handler)(nil)
 
 // Handler exposes session operations as RPC methods.
 type Handler struct {
-	driver   *awn.Driver
-	strategy awn.Strategy
-	routes   map[string]func(json.RawMessage) (any, error)
+	driver        *awn.Driver
+	strategy      awn.Strategy
+	routes        map[string]func(json.RawMessage) (any, error)
+	subscriptions map[string]*subscription // keyed by "sessionID:subID"
+	subMu         sync.Mutex
 }
 
 // NewHandler creates an RPC handler backed by a Driver and detection strategy.
@@ -286,6 +304,72 @@ func (h *Handler) Close(req IDRequest) error {
 
 func (h *Handler) List() (*ListResponse, error) {
 	return &ListResponse{Sessions: h.driver.List()}, nil
+}
+
+// SubscribeSession starts a goroutine that watches for screen updates on the given session
+// and calls notify with a JSON-encoded ScreenResponse for each update.
+// Returns the subscriber ID for later Unsubscribe calls.
+func (h *Handler) SubscribeSession(req SubscribeRequest, notify NotifyFunc) (string, error) {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return "", fmt.Errorf("session %q not found", req.ID)
+	}
+
+	subID, ch := sess.Subscribe()
+	stop := make(chan struct{})
+
+	sub := &subscription{
+		sessionID: req.ID,
+		subID:     subID,
+		stop:      stop,
+	}
+
+	h.subMu.Lock()
+	if h.subscriptions == nil {
+		h.subscriptions = make(map[string]*subscription)
+	}
+	h.subscriptions[req.ID+":"+subID] = sub
+	h.subMu.Unlock()
+
+	go func() {
+		defer sess.Unsubscribe(subID)
+		for {
+			select {
+			case <-ch:
+				scr := sess.Screen()
+				resp := buildScreenResponse(scr, "", nil)
+				data, err := json.Marshal(resp)
+				if err != nil {
+					continue
+				}
+				notify(data)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return subID, nil
+}
+
+// Subscribe implements the transport.Subscriber interface.
+func (h *Handler) Subscribe(sessionID string, notify func(json.RawMessage)) (string, error) {
+	return h.SubscribeSession(SubscribeRequest{ID: sessionID}, NotifyFunc(notify))
+}
+
+// Unsubscribe stops a subscription by session and subscriber ID.
+func (h *Handler) Unsubscribe(sessionID, subID string) {
+	key := sessionID + ":" + subID
+	h.subMu.Lock()
+	sub, ok := h.subscriptions[key]
+	if ok {
+		delete(h.subscriptions, key)
+	}
+	h.subMu.Unlock()
+
+	if ok {
+		close(sub.stop)
+	}
 }
 
 // getSession looks up a session by ID from the driver's list.

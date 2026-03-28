@@ -1,12 +1,15 @@
-.PHONY: build daemon cli clean test test-scripts test-all lint fmt
+.PHONY: build daemon cli mcp clean test test-scripts test-all lint fmt
 
-build: daemon cli
+build: daemon cli mcp
 
 daemon:
 	go build -o bin/awnd ./cmd/awnd
 
 cli:
 	go build -o bin/awn ./cmd/awn
+
+mcp:
+	go build -o bin/awn-mcp ./cmd/awn-mcp
 
 clean:
 	rm -rf bin/
@@ -31,4 +34,4 @@ fmt:
 	goimports -w .
 
 install: build
-	cp bin/awn bin/awnd $(GOPATH)/bin/ 2>/dev/null || cp bin/awn bin/awnd ~/.local/bin/
+	cp bin/awn bin/awnd bin/awn-mcp $(GOPATH)/bin/ 2>/dev/null || cp bin/awn bin/awnd bin/awn-mcp ~/.local/bin/

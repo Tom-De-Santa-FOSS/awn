@@ -24,6 +24,25 @@ type Dispatcher interface {
 	Dispatch(method string, params json.RawMessage) (any, error)
 }
 
+// Subscriber is an optional interface for dispatchers that support subscribe/unsubscribe.
+type Subscriber interface {
+	Subscribe(sessionID string, notify func(json.RawMessage)) (subID string, err error)
+	Unsubscribe(sessionID, subID string)
+}
+
+// JSONRPCNotification is a server-initiated JSON-RPC 2.0 notification (no id).
+type JSONRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params"`
+}
+
+// subscribeRequest is used to parse subscribe/unsubscribe params.
+type subscribeRequest struct {
+	ID    string `json:"id"`
+	SubID string `json:"sub_id,omitempty"`
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" },
 }
@@ -128,7 +147,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrentDispatches) // cap in-flight dispatches per connection
 
-	defer wg.Wait() // wait for in-flight handlers before conn.Close
+	// Track subscriptions for cleanup on disconnect.
+	var activeSubs []activeSub
+	var subsMu sync.Mutex
+
+	defer func() {
+		wg.Wait()
+		// Clean up subscriptions on disconnect.
+		if sub, ok := s.handler.(Subscriber); ok {
+			subsMu.Lock()
+			for _, as := range activeSubs {
+				sub.Unsubscribe(as.sessionID, as.subID)
+			}
+			subsMu.Unlock()
+		}
+	}()
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -157,6 +190,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		go func(req JSONRPCRequest) {
 			defer wg.Done()
 			defer func() { <-sem }()
+
+			// Handle subscribe/unsubscribe if the handler supports it.
+			if sub, ok := s.handler.(Subscriber); ok && (req.Method == "subscribe" || req.Method == "unsubscribe") {
+				s.handleSubscription(conn, &wmu, &subsMu, &activeSubs, sub, req)
+				return
+			}
 
 			result, err := s.handler.Dispatch(req.Method, req.Params)
 
@@ -191,6 +230,85 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				log.Printf("write response: %v", err)
 			}
 		}(req)
+	}
+}
+
+type activeSub struct {
+	sessionID string
+	subID     string
+}
+
+func (s *Server) handleSubscription(conn *websocket.Conn, wmu, subsMu *sync.Mutex, activeSubs *[]activeSub, sub Subscriber, req JSONRPCRequest) {
+	var params subscribeRequest
+	if req.Params != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			wmu.Lock()
+			s.sendError(conn, req.ID, -32602, "invalid params")
+			wmu.Unlock()
+			return
+		}
+	}
+
+	switch req.Method {
+	case "subscribe":
+		notify := func(data json.RawMessage) {
+			notif := JSONRPCNotification{
+				JSONRPC: "2.0",
+				Method:  "screen_update",
+				Params:  json.RawMessage(data),
+			}
+			msg, err := json.Marshal(notif)
+			if err != nil {
+				return
+			}
+			wmu.Lock()
+			_ = conn.WriteMessage(websocket.TextMessage, msg)
+			wmu.Unlock()
+		}
+
+		subID, err := sub.Subscribe(params.ID, notify)
+		if err != nil {
+			wmu.Lock()
+			s.sendError(conn, req.ID, -32603, err.Error())
+			wmu.Unlock()
+			return
+		}
+
+		subsMu.Lock()
+		*activeSubs = append(*activeSubs, activeSub{sessionID: params.ID, subID: subID})
+		subsMu.Unlock()
+
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			Result:  map[string]any{"subscribed": true, "sub_id": subID},
+			ID:      req.ID,
+		}
+		data, _ := json.Marshal(resp)
+		wmu.Lock()
+		_ = conn.WriteMessage(websocket.TextMessage, data)
+		wmu.Unlock()
+
+	case "unsubscribe":
+		sub.Unsubscribe(params.ID, params.SubID)
+
+		subsMu.Lock()
+		for i, as := range *activeSubs {
+			if as.sessionID == params.ID && as.subID == params.SubID {
+				*activeSubs = append((*activeSubs)[:i], (*activeSubs)[i+1:]...)
+				break
+			}
+		}
+		subsMu.Unlock()
+
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			Result:  map[string]any{"unsubscribed": true},
+			ID:      req.ID,
+		}
+		data, _ := json.Marshal(resp)
+		wmu.Lock()
+		_ = conn.WriteMessage(websocket.TextMessage, data)
+		wmu.Unlock()
 	}
 }
 

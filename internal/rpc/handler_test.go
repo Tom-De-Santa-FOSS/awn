@@ -130,6 +130,25 @@ func TestBuildScreenResponse_DefaultFormat_ReturnsLinesNoElements(t *testing.T) 
 	if resp.Elements != nil {
 		t.Fatal("expected no elements for default format")
 	}
+	if resp.State != "" {
+		t.Fatalf("expected empty state for text format, got %q", resp.State)
+	}
+}
+
+func TestBuildScreenResponse_StructuredFormat_IncludesState(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "structured", nil)
+	if resp.State != "idle" {
+		t.Fatalf("expected idle state, got %q", resp.State)
+	}
+}
+
+func TestBuildScreenResponse_FullFormat_IncludesState(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "full", nil)
+	if resp.State != "idle" {
+		t.Fatalf("expected idle state, got %q", resp.State)
+	}
 }
 
 func TestBuildScreenResponse_TextFormat_ReturnsLinesNoElements(t *testing.T) {
@@ -164,5 +183,27 @@ func TestBuildScreenResponse_FullFormat_ReturnsBoth(t *testing.T) {
 	}
 	if len(resp.Elements) != 1 || resp.Elements[0].Label != "Save" {
 		t.Fatalf("expected 1 element with label Save, got %v", resp.Elements)
+	}
+}
+
+func TestInferState_CursorAtPrompt_ReturnsWaitingForInput(t *testing.T) {
+	scr := testScreen()
+	// Put a "$ " prompt before cursor position
+	for i, ch := range "$ " {
+		scr.Cells[1][i].Char = ch
+	}
+	scr.Cursor = awn.Position{Row: 1, Col: 2}
+	state := inferState(scr)
+	if state != "waiting_for_input" {
+		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestInferState_EmptyScreen_ReturnsIdle(t *testing.T) {
+	scr := testScreen()
+	scr.Cursor = awn.Position{Row: 0, Col: 0}
+	state := inferState(scr)
+	if state != "idle" {
+		t.Fatalf("expected idle, got %q", state)
 	}
 }

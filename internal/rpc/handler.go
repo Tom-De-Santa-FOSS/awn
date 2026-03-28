@@ -130,11 +130,38 @@ type ScreenshotRequest struct {
 }
 
 type ScreenResponse struct {
-	Rows     int          `json:"rows"`
-	Cols     int          `json:"cols"`
-	Lines    []string     `json:"lines,omitempty"`
-	Cursor   awn.Position `json:"cursor"`
+	Rows     int           `json:"rows"`
+	Cols     int           `json:"cols"`
+	Lines    []string      `json:"lines,omitempty"`
+	Cursor   awn.Position  `json:"cursor"`
 	Elements []awn.Element `json:"elements,omitempty"`
+	State    string        `json:"state,omitempty"`
+}
+
+// promptSuffixes are line endings that indicate a shell/REPL waiting for input.
+var promptSuffixes = []string{"$ ", "# ", "> ", "% ", ">>> ", "... "}
+
+// inferState guesses whether the terminal is idle, active, or waiting for input.
+func inferState(scr *awn.Screen) string {
+	curRow := scr.Cursor.Row
+	curCol := scr.Cursor.Col
+	if curRow < 0 || curRow >= scr.Rows || curCol <= 0 {
+		return "idle"
+	}
+
+	// Extract text before cursor on the cursor row.
+	before := make([]rune, curCol)
+	for c := range curCol {
+		before[c] = scr.Cells[curRow][c].Char
+	}
+	line := string(before)
+
+	for _, suffix := range promptSuffixes {
+		if len(line) >= len(suffix) && line[len(line)-len(suffix):] == suffix {
+			return "waiting_for_input"
+		}
+	}
+	return "idle"
 }
 
 // buildScreenResponse constructs a ScreenResponse based on the requested format.
@@ -147,9 +174,11 @@ func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element)
 	switch format {
 	case "structured":
 		resp.Elements = elements
+		resp.State = inferState(scr)
 	case "full":
 		resp.Lines = scr.Lines()
 		resp.Elements = elements
+		resp.State = inferState(scr)
 	default:
 		resp.Lines = scr.Lines()
 	}

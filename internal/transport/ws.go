@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -74,12 +76,13 @@ type Server struct {
 	handler    Dispatcher
 	addr       string
 	token      string
+	maxConn    int32
 	activeConn atomic.Int32
 }
 
 // NewServer creates a WebSocket JSON-RPC server.
 func NewServer(d Dispatcher, addr string, token string) *Server {
-	return &Server{handler: d, addr: addr, token: token}
+	return &Server{handler: d, addr: addr, token: token, maxConn: maxConnectionsFromEnv()}
 }
 
 // ListenAndServe starts the WebSocket server.
@@ -127,7 +130,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if s.activeConn.Load() >= maxConcurrentConnections {
+	if s.activeConn.Load() >= s.maxConn {
 		http.Error(w, "too many connections", http.StatusServiceUnavailable)
 		return
 	}
@@ -231,6 +234,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}(req)
 	}
+}
+
+func maxConnectionsFromEnv() int32 {
+	value := os.Getenv("AWN_MAX_CONNECTIONS")
+	if value == "" {
+		return maxConcurrentConnections
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return maxConcurrentConnections
+	}
+	return int32(parsed)
 }
 
 type activeSub struct {

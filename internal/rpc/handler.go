@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -40,13 +41,16 @@ type Handler struct {
 	routes        map[string]func(json.RawMessage) (any, error)
 	subscriptions map[string]*subscription // keyed by "sessionID:subID"
 	subMu         sync.Mutex
+	prevMu        sync.Mutex
+	previousLines map[string][]string
 }
 
 // NewHandler creates an RPC handler backed by a Driver and detection strategy.
 func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 	h := &Handler{
-		driver:   d,
-		strategy: strategy,
+		driver:        d,
+		strategy:      strategy,
+		previousLines: make(map[string][]string),
 	}
 	h.routes = map[string]func(json.RawMessage) (any, error){
 		"create": func(p json.RawMessage) (any, error) {
@@ -69,6 +73,20 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.Input(req)
+		},
+		"mouse_click": func(p json.RawMessage) (any, error) {
+			var req MouseRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.MouseClick(req)
+		},
+		"mouse_move": func(p json.RawMessage) (any, error) {
+			var req MouseRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.MouseMove(req)
 		},
 		"wait_for_text": func(p json.RawMessage) (any, error) {
 			var req WaitTextRequest
@@ -97,6 +115,13 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.Close(req)
+		},
+		"record": func(p json.RawMessage) (any, error) {
+			var req RecordRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.Record(req)
 		},
 		"list": func(_ json.RawMessage) (any, error) {
 			return h.List()
@@ -127,6 +152,18 @@ type InputRequest struct {
 	Data string `json:"data"`
 }
 
+type MouseRequest struct {
+	ID     string `json:"id"`
+	Row    int    `json:"row"`
+	Col    int    `json:"col"`
+	Button int    `json:"button,omitempty"`
+}
+
+type RecordRequest struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
 type WaitTextRequest struct {
 	ID      string `json:"id"`
 	Text    string `json:"text"`
@@ -144,17 +181,27 @@ type ListResponse struct {
 }
 
 type ScreenshotRequest struct {
-	ID     string `json:"id"`
-	Format string `json:"format,omitempty"`
+	ID         string `json:"id"`
+	Format     string `json:"format,omitempty"`
+	Scrollback int    `json:"scrollback,omitempty"`
+}
+
+type ScreenChange struct {
+	Row   int      `json:"row"`
+	Lines []string `json:"lines"`
 }
 
 type ScreenResponse struct {
-	Rows     int           `json:"rows"`
-	Cols     int           `json:"cols"`
-	Lines    []string      `json:"lines,omitempty"`
-	Cursor   awn.Position  `json:"cursor"`
-	Elements []awn.Element `json:"elements,omitempty"`
-	State    string        `json:"state,omitempty"`
+	Rows     int            `json:"rows"`
+	Cols     int            `json:"cols"`
+	Hash     string         `json:"hash"`
+	BaseHash string         `json:"base_hash,omitempty"`
+	Lines    []string       `json:"lines,omitempty"`
+	History  []string       `json:"history,omitempty"`
+	Changes  []ScreenChange `json:"changes,omitempty"`
+	Cursor   awn.Position   `json:"cursor"`
+	Elements []awn.Element  `json:"elements,omitempty"`
+	State    string         `json:"state,omitempty"`
 }
 
 // promptSuffixes are line endings that indicate a shell/REPL waiting for input.
@@ -197,11 +244,15 @@ func inferState(scr *awn.Screen) string {
 }
 
 // buildScreenResponse constructs a ScreenResponse based on the requested format.
-func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element) *ScreenResponse {
+func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element, history []string, changes []ScreenChange, baseHash string) *ScreenResponse {
 	resp := &ScreenResponse{
-		Rows:   scr.Rows,
-		Cols:   scr.Cols,
-		Cursor: scr.Cursor,
+		Rows:     scr.Rows,
+		Cols:     scr.Cols,
+		Hash:     fmt.Sprintf("%x", sha256.Sum256([]byte(scr.Text()))),
+		Cursor:   scr.Cursor,
+		History:  history,
+		Changes:  changes,
+		BaseHash: baseHash,
 	}
 	switch format {
 	case "structured":
@@ -209,10 +260,11 @@ func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element)
 	case "full":
 		resp.Lines = scr.Lines()
 		resp.Elements = elements
+	case "diff":
 	default:
 		resp.Lines = scr.Lines()
 	}
-	if format == "structured" || format == "full" {
+	if format == "structured" || format == "full" || format == "diff" {
 		resp.State = inferState(scr)
 	}
 	return resp
@@ -244,13 +296,20 @@ func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	}
 
 	scr := sess.Screen()
+	history := sess.Scrollback(req.Scrollback)
+	var changes []ScreenChange
+	var baseHash string
 
 	var elements []awn.Element
 	if req.Format == "structured" || req.Format == "full" {
 		elements = sess.FindAll(h.strategy)
 	}
+	if req.Format == "diff" {
+		lines := scr.Lines()
+		baseHash, changes = h.diffFor(req.ID, lines)
+	}
 
-	return buildScreenResponse(scr, req.Format, elements), nil
+	return buildScreenResponse(scr, req.Format, elements, history, changes, baseHash), nil
 }
 
 func (h *Handler) Input(req InputRequest) error {
@@ -259,6 +318,22 @@ func (h *Handler) Input(req InputRequest) error {
 		return fmt.Errorf("session %q not found", req.ID)
 	}
 	return sess.SendKeys(req.Data)
+}
+
+func (h *Handler) MouseClick(req MouseRequest) error {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return fmt.Errorf("session %q not found", req.ID)
+	}
+	return sess.SendMouseClick(req.Row, req.Col, req.Button)
+}
+
+func (h *Handler) MouseMove(req MouseRequest) error {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return fmt.Errorf("session %q not found", req.ID)
+	}
+	return sess.SendMouseMove(req.Row, req.Col)
 }
 
 func (h *Handler) WaitForText(req WaitTextRequest) error {
@@ -302,6 +377,14 @@ func (h *Handler) Close(req IDRequest) error {
 	return h.driver.Close(req.ID)
 }
 
+func (h *Handler) Record(req RecordRequest) error {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return fmt.Errorf("session %q not found", req.ID)
+	}
+	return sess.RecordAsciicast(req.Path)
+}
+
 func (h *Handler) List() (*ListResponse, error) {
 	return &ListResponse{Sessions: h.driver.List()}, nil
 }
@@ -337,7 +420,7 @@ func (h *Handler) SubscribeSession(req SubscribeRequest, notify NotifyFunc) (str
 			select {
 			case <-ch:
 				scr := sess.Screen()
-				resp := buildScreenResponse(scr, "", nil)
+				resp := buildScreenResponse(scr, "", nil, nil, nil, "")
 				data, err := json.Marshal(resp)
 				if err != nil {
 					continue
@@ -370,6 +453,43 @@ func (h *Handler) Unsubscribe(sessionID, subID string) {
 	if ok {
 		close(sub.stop)
 	}
+}
+
+func (h *Handler) diffFor(sessionID string, current []string) (string, []ScreenChange) {
+	h.prevMu.Lock()
+	defer h.prevMu.Unlock()
+	previous := append([]string(nil), h.previousLines[sessionID]...)
+	h.previousLines[sessionID] = append([]string(nil), current...)
+	if len(previous) == 0 {
+		return "", []ScreenChange{{Row: 0, Lines: append([]string(nil), current...)}}
+	}
+	baseHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(previous, "\n"))))
+	var changes []ScreenChange
+	for row := 0; row < len(current); {
+		prev := ""
+		if row < len(previous) {
+			prev = previous[row]
+		}
+		if prev == current[row] {
+			row++
+			continue
+		}
+		start := row
+		var lines []string
+		for row < len(current) {
+			prev = ""
+			if row < len(previous) {
+				prev = previous[row]
+			}
+			if prev == current[row] {
+				break
+			}
+			lines = append(lines, current[row])
+			row++
+		}
+		changes = append(changes, ScreenChange{Row: start, Lines: lines})
+	}
+	return baseHash, changes
 }
 
 // getSession looks up a session by ID from the driver's list.

@@ -1,11 +1,17 @@
 package rpc
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/creack/pty"
 	"github.com/tom/awn"
 )
 
@@ -24,6 +30,27 @@ func (f fakeStrategy) Detect(_ *awn.Screen) []awn.Element { return f.elements }
 func newTestHandler() *Handler {
 	d := awn.NewDriver()
 	return NewHandler(d, stubStrategy{})
+}
+
+type pipePTY struct {
+	W *os.File
+}
+
+func (p *pipePTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	p.W = w
+	return r, nil
+}
+
+type bidirPTY struct {
+	ptmx *os.File
+}
+
+func (b *bidirPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+	return b.ptmx, nil
 }
 
 func TestDispatch_UnknownMethod(t *testing.T) {
@@ -124,7 +151,7 @@ func testScreen() *awn.Screen {
 
 func TestBuildScreenResponse_DefaultFormat_ReturnsLinesNoElements(t *testing.T) {
 	scr := testScreen()
-	resp := buildScreenResponse(scr, "", nil)
+	resp := buildScreenResponse(scr, "", nil, nil, nil, "")
 	if resp.Lines == nil {
 		t.Fatal("expected lines for default format")
 	}
@@ -136,9 +163,18 @@ func TestBuildScreenResponse_DefaultFormat_ReturnsLinesNoElements(t *testing.T) 
 	}
 }
 
+func TestBuildScreenResponse_DefaultFormat_IncludesScreenHash(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "", nil, nil, nil, "")
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte(scr.Text())))
+	if resp.Hash != want {
+		t.Fatalf("Hash = %q, want %q", resp.Hash, want)
+	}
+}
+
 func TestBuildScreenResponse_StructuredFormat_IncludesState(t *testing.T) {
 	scr := testScreen()
-	resp := buildScreenResponse(scr, "structured", nil)
+	resp := buildScreenResponse(scr, "structured", nil, nil, nil, "")
 	if resp.State != "idle" {
 		t.Fatalf("expected idle state, got %q", resp.State)
 	}
@@ -146,7 +182,7 @@ func TestBuildScreenResponse_StructuredFormat_IncludesState(t *testing.T) {
 
 func TestBuildScreenResponse_FullFormat_IncludesState(t *testing.T) {
 	scr := testScreen()
-	resp := buildScreenResponse(scr, "full", nil)
+	resp := buildScreenResponse(scr, "full", nil, nil, nil, "")
 	if resp.State != "idle" {
 		t.Fatalf("expected idle state, got %q", resp.State)
 	}
@@ -154,7 +190,7 @@ func TestBuildScreenResponse_FullFormat_IncludesState(t *testing.T) {
 
 func TestBuildScreenResponse_TextFormat_ReturnsLinesNoElements(t *testing.T) {
 	scr := testScreen()
-	resp := buildScreenResponse(scr, "text", nil)
+	resp := buildScreenResponse(scr, "text", nil, nil, nil, "")
 	if resp.Lines == nil {
 		t.Fatal("expected lines for text format")
 	}
@@ -166,7 +202,7 @@ func TestBuildScreenResponse_TextFormat_ReturnsLinesNoElements(t *testing.T) {
 func TestBuildScreenResponse_StructuredFormat_ReturnsElementsNoLines(t *testing.T) {
 	scr := testScreen()
 	elems := []awn.Element{{Type: "button", Label: "OK"}}
-	resp := buildScreenResponse(scr, "structured", elems)
+	resp := buildScreenResponse(scr, "structured", elems, nil, nil, "")
 	if resp.Lines != nil {
 		t.Fatal("expected no lines for structured format")
 	}
@@ -178,7 +214,7 @@ func TestBuildScreenResponse_StructuredFormat_ReturnsElementsNoLines(t *testing.
 func TestBuildScreenResponse_FullFormat_ReturnsBoth(t *testing.T) {
 	scr := testScreen()
 	elems := []awn.Element{{Type: "button", Label: "Save"}}
-	resp := buildScreenResponse(scr, "full", elems)
+	resp := buildScreenResponse(scr, "full", elems, nil, nil, "")
 	if resp.Lines == nil {
 		t.Fatal("expected lines for full format")
 	}
@@ -266,7 +302,7 @@ func TestScreenResponse_JSON_StructuredFormat_OmitsLines(t *testing.T) {
 func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
 	h := newTestHandler()
 	// All three formats should be accepted (session-not-found error, not invalid-params).
-	for _, format := range []string{"text", "structured", "full"} {
+	for _, format := range []string{"text", "structured", "full", "diff"} {
 		params := fmt.Sprintf(`{"id":"nonexistent","format":%q}`, format)
 		_, err := h.Dispatch("screenshot", json.RawMessage(params))
 		if err == nil {
@@ -276,6 +312,146 @@ func TestDispatch_ScreenshotWithFormat_AcceptsFormatParam(t *testing.T) {
 			t.Fatalf("format=%s: rejected format param: %v", format, err)
 		}
 	}
+}
+
+func TestBuildScreenResponse_WithScrollback_IncludesHistory(t *testing.T) {
+	scr := testScreen()
+	resp := buildScreenResponse(scr, "", nil, []string{"one", "two"}, nil, "")
+	if len(resp.History) != 2 || resp.History[0] != "one" || resp.History[1] != "two" {
+		t.Fatalf("History = %#v, want [\"one\", \"two\"]", resp.History)
+	}
+}
+
+func TestBuildScreenResponse_DiffFormat_OmitsLinesAndIncludesChanges(t *testing.T) {
+	scr := testScreen()
+	changes := []ScreenChange{{Row: 1, Lines: []string{"updated"}}}
+	resp := buildScreenResponse(scr, "diff", nil, nil, changes, "base")
+	if resp.Lines != nil {
+		t.Fatalf("expected diff response to omit lines, got %#v", resp.Lines)
+	}
+	if len(resp.Changes) != 1 || resp.Changes[0].Row != 1 {
+		t.Fatalf("Changes = %#v, want row 1 change", resp.Changes)
+	}
+	if resp.BaseHash != "base" {
+		t.Fatalf("BaseHash = %q, want %q", resp.BaseHash, "base")
+	}
+}
+
+func TestHandler_Screenshot_WithScrollback_IncludesHistory(t *testing.T) {
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h := NewHandler(d, stubStrategy{})
+
+	s, err := d.SessionWithConfig(awn.Config{Command: "true", Scrollback: 2})
+	if err != nil {
+		t.Fatalf("SessionWithConfig: %v", err)
+	}
+
+	_, _ = p.W.WriteString("one\ntwo\nthree\n")
+	if err := s.WaitForText("three", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	resp, err := h.Screenshot(ScreenshotRequest{ID: s.ID, Scrollback: 2})
+	if err != nil {
+		t.Fatalf("Screenshot: %v", err)
+	}
+	if len(resp.History) != 2 || resp.History[0] != "two" || resp.History[1] != "three" {
+		t.Fatalf("History = %#v, want [\"two\", \"three\"]", resp.History)
+	}
+}
+
+func TestHandler_Screenshot_DiffFormat_ReturnsChangedRows(t *testing.T) {
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h := NewHandler(d, stubStrategy{})
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("before")
+	if err := s.WaitForText("before", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+	if _, err := h.Screenshot(ScreenshotRequest{ID: s.ID, Format: "diff"}); err != nil {
+		t.Fatalf("first Screenshot: %v", err)
+	}
+
+	_, _ = p.W.WriteString("\rafter ")
+	if err := s.WaitForText("after", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	resp, err := h.Screenshot(ScreenshotRequest{ID: s.ID, Format: "diff"})
+	if err != nil {
+		t.Fatalf("second Screenshot: %v", err)
+	}
+	if resp.Lines != nil {
+		t.Fatalf("expected diff response to omit lines, got %#v", resp.Lines)
+	}
+	if len(resp.Changes) == 0 {
+		t.Fatal("expected diff changes, got none")
+	}
+}
+
+func TestDispatch_MouseClick_WritesMouseSequence(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	d := awn.NewDriver(awn.WithPTY(&bidirPTY{ptmx: w}))
+	h := NewHandler(d, stubStrategy{})
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, err = h.Dispatch("mouse_click", json.RawMessage(fmt.Sprintf(`{"id":%q,"row":1,"col":2,"button":0}`, s.ID)))
+	if err == nil {
+		buf := make([]byte, 32)
+		n, readErr := r.Read(buf)
+		if readErr != nil {
+			t.Fatalf("Read: %v", readErr)
+		}
+		if got, want := string(buf[:n]), "\x1b[<0;3;2M\x1b[<0;3;2m"; got != want {
+			t.Fatalf("mouse click = %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatalf("Dispatch: %v", err)
+}
+
+func TestDispatch_Record_WritesCastFile(t *testing.T) {
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h := NewHandler(d, stubStrategy{})
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	_, _ = p.W.WriteString("hello")
+	if err := s.WaitForText("hello", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "session.cast")
+	_, err = h.Dispatch("record", json.RawMessage(fmt.Sprintf(`{"id":%q,"path":%q}`, s.ID, path)))
+	if err == nil {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile: %v", readErr)
+		}
+		if !strings.Contains(string(data), "hello") {
+			t.Fatalf("expected cast output to include hello, got %q", string(data))
+		}
+		return
+	}
+	t.Fatalf("Dispatch: %v", err)
 }
 
 func TestInferState_CursorRowOutOfBounds_ReturnsIdle(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,17 +14,25 @@ import (
 
 // Session wraps a running terminal application.
 type Session struct {
-	ID      string
-	cmd     *exec.Cmd
-	ptmx    *os.File
-	term    vt10x.Terminal
-	mu      sync.RWMutex
-	once    sync.Once
-	wg      sync.WaitGroup
+	ID            string
+	cmd           *exec.Cmd
+	ptmx          *os.File
+	term          vt10x.Terminal
+	mu            sync.RWMutex
+	once          sync.Once
+	wg            sync.WaitGroup
 	done          chan struct{}
 	updated       chan struct{}
 	subscribers   map[string]chan struct{}
 	subscribersMu sync.RWMutex
+	cfg           Config
+	history       *historyBuffer
+	events        []castEvent
+	snapshot      *Screen
+	restored      bool
+	startedAt     time.Time
+	updatedAt     time.Time
+	persist       func()
 }
 
 // readBufPool reuses 32KB read buffers.
@@ -50,14 +59,25 @@ func (s *Session) readLoop() {
 
 		s.mu.Lock()
 		_, _ = s.term.Write(buf[:n])
+		s.appendOutput(buf[:n])
+		persist := s.persist
 		s.mu.Unlock()
 
+		if persist != nil {
+			persist()
+		}
 		select {
 		case s.updated <- struct{}{}:
 		default:
 		}
 		s.notifySubscribers()
 	}
+}
+
+func (s *Session) stopPersisting() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persist = nil
 }
 
 // Text returns the plain text content of the terminal screen.
@@ -67,6 +87,9 @@ func (s *Session) Text() string {
 
 // ContainsText checks if text appears on screen without building a full snapshot.
 func (s *Session) ContainsText(text string) bool {
+	if s.restored {
+		return len(text) == 0 || containsTextLines(s.Screen().Lines(), text)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -94,6 +117,18 @@ func (s *Session) ContainsText(text string) bool {
 			line = append(line, s.term.Cell(col, row).Char)
 		}
 		if runesContains(line, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTextLines(lines []string, text string) bool {
+	if text == "" {
+		return true
+	}
+	for _, line := range lines {
+		if strings.Contains(line, text) {
 			return true
 		}
 	}
@@ -178,6 +213,13 @@ func runesContains(haystack, needle []rune) bool {
 func (s *Session) Screen() *Screen {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.screenLocked()
+}
+
+func (s *Session) screenLocked() *Screen {
+	if s.restored {
+		return cloneScreen(s.snapshot)
+	}
 
 	s.term.Lock()
 	defer s.term.Unlock()
@@ -219,7 +261,6 @@ func (s *Session) FindOne(strategy Strategy, match MatchFunc) (Element, error) {
 	}
 	return Element{}, fmt.Errorf("no matching element found")
 }
-
 
 // vt10x Mode bit positions (from vt10x state.go attrReverse iota, unexported).
 // Pinned by TestMapAttrs_matches_vt10x_terminal regression test.
@@ -296,12 +337,32 @@ func (s *Session) notifySubscribers() {
 
 // SendKeys writes input to the session's PTY.
 func (s *Session) SendKeys(data string) error {
+	if s.restored {
+		return fmt.Errorf("session %q is restored snapshot only", s.ID)
+	}
 	_, err := s.ptmx.WriteString(data)
 	return err
 }
 
+func (s *Session) SendMouseMove(row, col int) error {
+	return s.SendKeys(fmt.Sprintf("\x1b[<35;%d;%dM", col+1, row+1))
+}
+
+func (s *Session) SendMouseClick(row, col, button int) error {
+	if err := s.SendKeys(fmt.Sprintf("\x1b[<%d;%d;%dM", button, col+1, row+1)); err != nil {
+		return err
+	}
+	return s.SendKeys(fmt.Sprintf("\x1b[<%d;%d;%dm", button, col+1, row+1))
+}
+
 // Close terminates this session.
 func (s *Session) Close() error {
+	if s.restored {
+		s.once.Do(func() {
+			close(s.done)
+		})
+		return nil
+	}
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}

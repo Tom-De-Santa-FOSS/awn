@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/hinshun/vt10x"
 )
@@ -33,6 +34,7 @@ type Session struct {
 	startedAt     time.Time
 	updatedAt     time.Time
 	persist       func()
+	resizePTY     func(*os.File, *pty.Winsize) error
 }
 
 // readBufPool reuses 32KB read buffers.
@@ -353,6 +355,35 @@ func (s *Session) SendMouseClick(row, col, button int) error {
 		return err
 	}
 	return s.SendKeys(fmt.Sprintf("\x1b[<%d;%d;%dm", button, col+1, row+1))
+}
+
+func (s *Session) Resize(rows, cols int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cfg.Rows = rows
+	s.cfg.Cols = cols
+	if s.restored {
+		if s.snapshot != nil {
+			s.snapshot.Rows = rows
+			s.snapshot.Cols = cols
+			s.snapshot.Cells = make([][]Cell, rows)
+			for r := range rows {
+				s.snapshot.Cells[r] = make([]Cell, cols)
+			}
+		}
+		return nil
+	}
+
+	s.term.Resize(cols, rows)
+	resizePTY := s.resizePTY
+	if resizePTY == nil {
+		resizePTY = pty.Setsize
+	}
+	if err := resizePTY(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Close terminates this session.

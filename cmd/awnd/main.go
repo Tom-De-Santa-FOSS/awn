@@ -19,12 +19,7 @@ func main() {
 	flag.Parse()
 
 	token := os.Getenv("AWN_TOKEN")
-	stateDir := os.Getenv("AWN_STATE_DIR")
-	if stateDir == "" {
-		if cacheDir, err := os.UserCacheDir(); err == nil {
-			stateDir = filepath.Join(cacheDir, "awn", "sessions")
-		}
-	}
+	stateDir := resolveStateDir(os.Getenv("AWN_STATE_DIR"), os.UserCacheDir)
 
 	driver := awn.NewDriver(awn.WithPersistenceDir(stateDir))
 	handler := rpc.NewHandler(driver, awtreestrategy.New())
@@ -42,4 +37,15 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func resolveStateDir(envValue string, userCacheDir func() (string, error)) string {
+	if envValue != "" {
+		return envValue
+	}
+	cacheDir, err := userCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cacheDir, "awn", "sessions")
 }

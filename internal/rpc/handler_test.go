@@ -20,13 +20,6 @@ type stubStrategy struct{}
 
 func (stubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
 
-// fakeStrategy returns canned elements for format tests.
-type fakeStrategy struct {
-	elements []awn.Element
-}
-
-func (f fakeStrategy) Detect(_ *awn.Screen) []awn.Element { return f.elements }
-
 func newTestHandler() *Handler {
 	d := awn.NewDriver()
 	return NewHandler(d, stubStrategy{})
@@ -87,6 +80,21 @@ func TestDispatch_List(t *testing.T) {
 	}
 }
 
+func TestDispatch_Ping(t *testing.T) {
+	h := newTestHandler()
+	result, err := h.Dispatch("ping", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp, ok := result.(*PingResponse)
+	if !ok {
+		t.Fatalf("expected *PingResponse, got %T", result)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("Status = %q, want %q", resp.Status, "ok")
+	}
+}
+
 func TestDispatch_ScreenshotNotFound(t *testing.T) {
 	h := newTestHandler()
 	_, err := h.Dispatch("screenshot", json.RawMessage(`{"id":"nonexistent"}`))
@@ -132,6 +140,20 @@ func TestDispatch_CloseNotFound(t *testing.T) {
 	_, err := h.Dispatch("close", json.RawMessage(`{"id":"nonexistent"}`))
 	if err == nil {
 		t.Fatalf("expected error for nonexistent session, got nil")
+	}
+}
+
+func TestDispatch_ResizeNotFound(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("resize", json.RawMessage(`{"id":"nonexistent","rows":40,"cols":100}`))
+	if err == nil {
+		t.Fatalf("expected error for nonexistent session, got nil")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatalf("expected resize route to exist, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid params") {
+		t.Fatalf("expected resize params to be accepted, got: %v", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 )
 
 // pipePTY is a fake PTYStarter that returns a pipe instead of a real PTY.
@@ -189,6 +190,50 @@ func TestSession_Screen_ReturnsCorrectDimensions(t *testing.T) {
 		if len(row) != screen.Cols {
 			t.Fatalf("len(Cells[%d]) = %d, want %d", i, len(row), screen.Cols)
 		}
+	}
+}
+
+func TestSession_Resize_UpdatesScreenDimensions(t *testing.T) {
+	s := &Session{
+		term:     vt10x.New(vt10x.WithSize(80, 24)),
+		cfg:      Config{Rows: 24, Cols: 80},
+		restored: true,
+		snapshot: &Screen{Rows: 24, Cols: 80, Cells: make([][]Cell, 24)},
+	}
+
+	if err := s.Resize(40, 100); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+
+	screen := s.Screen()
+	if screen.Rows != 40 {
+		t.Fatalf("Screen().Rows = %d, want %d", screen.Rows, 40)
+	}
+	if screen.Cols != 100 {
+		t.Fatalf("Screen().Cols = %d, want %d", screen.Cols, 100)
+	}
+}
+
+func TestSession_Resize_LiveSessionUsesPTYResizer(t *testing.T) {
+	called := false
+	s := &Session{
+		ptmx: os.NewFile(0, "/dev/null"),
+		term: vt10x.New(vt10x.WithSize(80, 24)),
+		cfg:  Config{Rows: 24, Cols: 80},
+		resizePTY: func(_ *os.File, ws *pty.Winsize) error {
+			called = true
+			if ws.Rows != 40 || ws.Cols != 100 {
+				t.Fatalf("winsize = %#v, want rows=40 cols=100", ws)
+			}
+			return nil
+		},
+	}
+
+	if err := s.Resize(40, 100); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if !called {
+		t.Fatal("expected PTY resizer to be called")
 	}
 }
 

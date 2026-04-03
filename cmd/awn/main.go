@@ -11,10 +11,21 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type rpcCaller func(addr, method string, params any) (string, error)
+
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
+	stdout, err := run(os.Args[1:], callRPC)
+	if err != nil {
+		fatal(err.Error())
+	}
+	if stdout != "" {
+		fmt.Print(stdout)
+	}
+}
+
+func run(args []string, caller rpcCaller) (string, error) {
+	if len(args) < 1 {
+		return "", fmt.Errorf("usage: awn <command>")
 	}
 
 	addr := os.Getenv("AWN_ADDR")
@@ -22,147 +33,194 @@ func main() {
 		addr = "ws://localhost:7600"
 	}
 
-	cmd := os.Args[1]
+	cmd := args[0]
 
 	switch cmd {
 	case "create":
-		if len(os.Args) < 3 {
-			fatal("usage: awn create <command> [args...]")
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn create <command> [args...]")
 		}
-		params := map[string]any{
-			"command": os.Args[2],
-			"rows":    24,
-			"cols":    80,
+		params := map[string]any{"command": args[1], "rows": 24, "cols": 80}
+		if len(args) > 2 {
+			params["args"] = args[2:]
 		}
-		if len(os.Args) > 3 {
-			params["args"] = os.Args[3:]
+		result, err := caller(addr, "create", params)
+		if err != nil {
+			return "", err
 		}
-		result := call(addr, "create", params)
-		fmt.Println(result)
-
+		return result + "\n", nil
 	case "screenshot":
-		if len(os.Args) < 3 {
-			fatal("usage: awn screenshot <session-id> [--json] [--diff] [--scrollback N]")
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn screenshot <session-id> [--json] [--diff] [--scrollback N]")
 		}
-		params := map[string]any{"id": os.Args[2]}
+		params := map[string]any{"id": args[1]}
 		printJSON := false
-		for i := 3; i < len(os.Args); i++ {
-			switch os.Args[i] {
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
 			case "--json":
 				printJSON = true
 			case "--diff":
 				params["format"] = "diff"
 				printJSON = true
+			case "--full":
+				params["format"] = "full"
+				printJSON = true
 			case "--scrollback":
 				i++
-				if i >= len(os.Args) {
-					fatal("missing value for --scrollback")
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --scrollback")
 				}
-				scrollback, err := strconv.Atoi(os.Args[i])
+				scrollback, err := strconv.Atoi(args[i])
 				if err != nil {
-					fatal("invalid --scrollback value")
+					return "", fmt.Errorf("invalid --scrollback value")
 				}
 				params["scrollback"] = scrollback
 				printJSON = true
 			default:
-				fatal("unknown screenshot flag: " + os.Args[i])
+				return "", fmt.Errorf("unknown screenshot flag: %s", args[i])
 			}
 		}
-		result := call(addr, "screenshot", params)
+		result, err := caller(addr, "screenshot", params)
+		if err != nil {
+			return "", err
+		}
 		if printJSON {
-			fmt.Println(result)
-		} else {
-			// Print just the lines as plain text
-			var snap struct {
-				Lines []string `json:"lines"`
-			}
-			if err := json.Unmarshal([]byte(result), &snap); err != nil {
-				fatal("parse screenshot: " + err.Error())
-			}
-			fmt.Println(strings.Join(snap.Lines, "\n"))
+			return result + "\n", nil
 		}
-
+		var snap struct {
+			Lines []string `json:"lines"`
+		}
+		if err := json.Unmarshal([]byte(result), &snap); err != nil {
+			return "", fmt.Errorf("parse screenshot: %w", err)
+		}
+		return strings.Join(snap.Lines, "\n") + "\n", nil
 	case "input":
-		if len(os.Args) < 4 {
-			fatal("usage: awn input <session-id> <text>")
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn input <session-id> <text>")
 		}
-		call(addr, "input", map[string]any{
-			"id":   os.Args[2],
-			"data": os.Args[3],
-		})
-		fmt.Println("ok")
-
+		_, err := caller(addr, "input", map[string]any{"id": args[1], "data": args[2]})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
+	case "resize":
+		if len(args) < 4 {
+			return "", fmt.Errorf("usage: awn resize <session-id> <rows> <cols>")
+		}
+		rows, err := strconv.Atoi(args[2])
+		if err != nil {
+			return "", fmt.Errorf("invalid rows: %s", args[2])
+		}
+		cols, err := strconv.Atoi(args[3])
+		if err != nil {
+			return "", fmt.Errorf("invalid cols: %s", args[3])
+		}
+		_, err = caller(addr, "resize", map[string]any{"id": args[1], "rows": rows, "cols": cols})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
 	case "mouse-click":
-		if len(os.Args) < 5 {
-			fatal("usage: awn mouse-click <session-id> <row> <col> [button]")
+		if len(args) < 4 {
+			return "", fmt.Errorf("usage: awn mouse-click <session-id> <row> <col> [button]")
 		}
-		row := mustInt(os.Args[3], "row")
-		col := mustInt(os.Args[4], "col")
+		row, err := strconv.Atoi(args[2])
+		if err != nil {
+			return "", fmt.Errorf("invalid row: %s", args[2])
+		}
+		col, err := strconv.Atoi(args[3])
+		if err != nil {
+			return "", fmt.Errorf("invalid col: %s", args[3])
+		}
 		button := 0
-		if len(os.Args) > 5 {
-			button = mustInt(os.Args[5], "button")
+		if len(args) > 4 {
+			button, err = strconv.Atoi(args[4])
+			if err != nil {
+				return "", fmt.Errorf("invalid button: %s", args[4])
+			}
 		}
-		call(addr, "mouse_click", map[string]any{"id": os.Args[2], "row": row, "col": col, "button": button})
-		fmt.Println("ok")
-
+		_, err = caller(addr, "mouse_click", map[string]any{"id": args[1], "row": row, "col": col, "button": button})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
 	case "mouse-move":
-		if len(os.Args) < 5 {
-			fatal("usage: awn mouse-move <session-id> <row> <col>")
+		if len(args) < 4 {
+			return "", fmt.Errorf("usage: awn mouse-move <session-id> <row> <col>")
 		}
-		row := mustInt(os.Args[3], "row")
-		col := mustInt(os.Args[4], "col")
-		call(addr, "mouse_move", map[string]any{"id": os.Args[2], "row": row, "col": col})
-		fmt.Println("ok")
-
+		row, err := strconv.Atoi(args[2])
+		if err != nil {
+			return "", fmt.Errorf("invalid row: %s", args[2])
+		}
+		col, err := strconv.Atoi(args[3])
+		if err != nil {
+			return "", fmt.Errorf("invalid col: %s", args[3])
+		}
+		_, err = caller(addr, "mouse_move", map[string]any{"id": args[1], "row": row, "col": col})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
 	case "wait":
-		if len(os.Args) < 4 {
-			fatal("usage: awn wait <session-id> <text>")
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn wait <session-id> <text>")
 		}
-		call(addr, "wait_for_text", map[string]any{
-			"id":   os.Args[2],
-			"text": os.Args[3],
-		})
-		fmt.Println("ok")
-
+		_, err := caller(addr, "wait_for_text", map[string]any{"id": args[1], "text": args[2]})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
 	case "close":
-		if len(os.Args) < 3 {
-			fatal("usage: awn close <session-id>")
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn close <session-id>")
 		}
-		call(addr, "close", map[string]any{"id": os.Args[2]})
-		fmt.Println("ok")
-
+		_, err := caller(addr, "close", map[string]any{"id": args[1]})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
 	case "detect":
-		if len(os.Args) < 3 {
-			fatal("usage: awn detect <session-id>")
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn detect <session-id>")
 		}
-		result := call(addr, "detect", map[string]any{"id": os.Args[2]})
-		fmt.Println(result)
-
+		result, err := caller(addr, "detect", map[string]any{"id": args[1]})
+		if err != nil {
+			return "", err
+		}
+		return result + "\n", nil
 	case "list":
-		result := call(addr, "list", nil)
-		fmt.Println(result)
-
+		result, err := caller(addr, "list", nil)
+		if err != nil {
+			return "", err
+		}
+		return result + "\n", nil
 	case "record":
-		if len(os.Args) < 4 {
-			fatal("usage: awn record <session-id> <file>")
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn record <session-id> <file>")
 		}
-		call(addr, "record", map[string]any{"id": os.Args[2], "path": os.Args[3]})
-		fmt.Println("ok")
-
+		_, err := caller(addr, "record", map[string]any{"id": args[1], "path": args[2]})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
+	case "ping":
+		result, err := caller(addr, "ping", nil)
+		if err != nil {
+			return "", err
+		}
+		return result + "\n", nil
 	case "watch":
-		if len(os.Args) < 3 {
-			fatal("usage: awn watch <session-id>")
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn watch <session-id>")
 		}
-		watch(addr, os.Args[2])
-
+		watch(addr, args[1])
+		return "", nil
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-		usage()
-		os.Exit(1)
+		return "", fmt.Errorf("unknown command: %s", cmd)
 	}
 }
 
-func call(addr, method string, params any) string {
+func callRPC(addr, method string, params any) (string, error) {
 	header := http.Header{}
 	if token := os.Getenv("AWN_TOKEN"); token != "" {
 		header.Set("Authorization", "Bearer "+token)
@@ -170,7 +228,7 @@ func call(addr, method string, params any) string {
 
 	conn, _, err := websocket.DefaultDialer.Dial(addr, header)
 	if err != nil {
-		fatal("connect to daemon: " + err.Error())
+		return "", fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck
 
@@ -185,15 +243,15 @@ func call(addr, method string, params any) string {
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		fatal("marshal request: " + err.Error())
+		return "", fmt.Errorf("marshal request: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		fatal("send: " + err.Error())
+		return "", fmt.Errorf("send: %w", err)
 	}
 
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
-		fatal("recv: " + err.Error())
+		return "", fmt.Errorf("recv: %w", err)
 	}
 
 	var resp struct {
@@ -204,48 +262,17 @@ func call(addr, method string, params any) string {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(msg, &resp); err != nil {
-		fatal("parse response: " + err.Error())
+		return "", fmt.Errorf("parse response: %w", err)
 	}
 
 	if resp.Error != nil {
-		fatal(resp.Error.Message)
+		return "", fmt.Errorf("%s", resp.Error.Message)
 	}
 
-	return string(resp.Result)
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, `awn — TUI automation for AI agents
-
-Commands:
-  awn create <command> [args...]     Start a TUI session
-  awn screenshot <id> [--json]       Capture screen state
-  awn screenshot <id> --diff         Return changed rows since last screenshot
-  awn detect <id>                    Detect UI elements (accessibility tree)
-  awn input <id> <text|keys>         Send input to session
-  awn mouse-click <id> <row> <col> [button]
-                                     Send xterm mouse click
-  awn mouse-move <id> <row> <col>    Send xterm mouse move
-  awn wait <id> <text>               Wait for text to appear
-  awn record <id> <file>             Write asciicast v2 recording
-  awn close <id>                     Terminate session
-  awn list                           List active sessions
-  awn watch <id>                     Watch session screen in real-time
-
-Environment:
-  AWN_ADDR    Daemon address (default: ws://localhost:7600)
-  AWN_TOKEN   Bearer token for authentication`)
+	return string(resp.Result), nil
 }
 
 func fatal(msg string) {
 	fmt.Fprintln(os.Stderr, "error:", msg)
 	os.Exit(1)
-}
-
-func mustInt(value, name string) int {
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		fatal("invalid " + name + ": " + value)
-	}
-	return parsed
 }

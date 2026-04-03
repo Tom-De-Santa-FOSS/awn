@@ -9,3 +9,10 @@ func WithPTY(p PTYStarter) DriverOption {
 		d.pty = p
 	}
 }
+
+// WithPersistenceDir stores session snapshots in dir and restores them on startup.
+func WithPersistenceDir(dir string) DriverOption {
+	return func(d *Driver) {
+		d.persistenceDir = dir
+	}
+}

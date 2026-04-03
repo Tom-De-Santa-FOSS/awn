@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -41,10 +42,34 @@ func main() {
 
 	case "screenshot":
 		if len(os.Args) < 3 {
-			fatal("usage: awn screenshot <session-id> [--json]")
+			fatal("usage: awn screenshot <session-id> [--json] [--diff] [--scrollback N]")
 		}
-		result := call(addr, "screenshot", map[string]any{"id": os.Args[2]})
-		if len(os.Args) > 3 && os.Args[3] == "--json" {
+		params := map[string]any{"id": os.Args[2]}
+		printJSON := false
+		for i := 3; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--json":
+				printJSON = true
+			case "--diff":
+				params["format"] = "diff"
+				printJSON = true
+			case "--scrollback":
+				i++
+				if i >= len(os.Args) {
+					fatal("missing value for --scrollback")
+				}
+				scrollback, err := strconv.Atoi(os.Args[i])
+				if err != nil {
+					fatal("invalid --scrollback value")
+				}
+				params["scrollback"] = scrollback
+				printJSON = true
+			default:
+				fatal("unknown screenshot flag: " + os.Args[i])
+			}
+		}
+		result := call(addr, "screenshot", params)
+		if printJSON {
 			fmt.Println(result)
 		} else {
 			// Print just the lines as plain text
@@ -65,6 +90,28 @@ func main() {
 			"id":   os.Args[2],
 			"data": os.Args[3],
 		})
+		fmt.Println("ok")
+
+	case "mouse-click":
+		if len(os.Args) < 5 {
+			fatal("usage: awn mouse-click <session-id> <row> <col> [button]")
+		}
+		row := mustInt(os.Args[3], "row")
+		col := mustInt(os.Args[4], "col")
+		button := 0
+		if len(os.Args) > 5 {
+			button = mustInt(os.Args[5], "button")
+		}
+		call(addr, "mouse_click", map[string]any{"id": os.Args[2], "row": row, "col": col, "button": button})
+		fmt.Println("ok")
+
+	case "mouse-move":
+		if len(os.Args) < 5 {
+			fatal("usage: awn mouse-move <session-id> <row> <col>")
+		}
+		row := mustInt(os.Args[3], "row")
+		col := mustInt(os.Args[4], "col")
+		call(addr, "mouse_move", map[string]any{"id": os.Args[2], "row": row, "col": col})
 		fmt.Println("ok")
 
 	case "wait":
@@ -94,6 +141,13 @@ func main() {
 	case "list":
 		result := call(addr, "list", nil)
 		fmt.Println(result)
+
+	case "record":
+		if len(os.Args) < 4 {
+			fatal("usage: awn record <session-id> <file>")
+		}
+		call(addr, "record", map[string]any{"id": os.Args[2], "path": os.Args[3]})
+		fmt.Println("ok")
 
 	case "watch":
 		if len(os.Args) < 3 {
@@ -166,9 +220,14 @@ func usage() {
 Commands:
   awn create <command> [args...]     Start a TUI session
   awn screenshot <id> [--json]       Capture screen state
+  awn screenshot <id> --diff         Return changed rows since last screenshot
   awn detect <id>                    Detect UI elements (accessibility tree)
   awn input <id> <text|keys>         Send input to session
+  awn mouse-click <id> <row> <col> [button]
+                                     Send xterm mouse click
+  awn mouse-move <id> <row> <col>    Send xterm mouse move
   awn wait <id> <text>               Wait for text to appear
+  awn record <id> <file>             Write asciicast v2 recording
   awn close <id>                     Terminate session
   awn list                           List active sessions
   awn watch <id>                     Watch session screen in real-time
@@ -181,4 +240,12 @@ Environment:
 func fatal(msg string) {
 	fmt.Fprintln(os.Stderr, "error:", msg)
 	os.Exit(1)
+}
+
+func mustInt(value, name string) int {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		fatal("invalid " + name + ": " + value)
+	}
+	return parsed
 }

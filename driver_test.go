@@ -1,8 +1,10 @@
 package awn
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -355,6 +357,152 @@ func TestSession_SendKeys_WritesToPTY(t *testing.T) {
 	}
 	if string(buf[:n]) != "hello" {
 		t.Errorf("got %q, want %q", string(buf[:n]), "hello")
+	}
+}
+
+func TestSession_SendMouseClick_WritesSGRSequence(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	d := NewDriver(WithPTY(&bidirPTY{ptmx: w}))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	if err := s.SendMouseClick(4, 7, 0); err != nil {
+		t.Fatalf("SendMouseClick: %v", err)
+	}
+
+	buf := make([]byte, 32)
+	n, err := r.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got, want := string(buf[:n]), "\x1b[<0;8;5M\x1b[<0;8;5m"; got != want {
+		t.Fatalf("mouse click = %q, want %q", got, want)
+	}
+}
+
+func TestSession_SendMouseMove_WritesSGRSequence(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	d := NewDriver(WithPTY(&bidirPTY{ptmx: w}))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	if err := s.SendMouseMove(2, 3); err != nil {
+		t.Fatalf("SendMouseMove: %v", err)
+	}
+
+	buf := make([]byte, 16)
+	n, err := r.Read(buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got, want := string(buf[:n]), "\x1b[<35;4;3M"; got != want {
+		t.Fatalf("mouse move = %q, want %q", got, want)
+	}
+}
+
+func TestSession_Scrollback_ReturnsRecentLines(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.SessionWithConfig(Config{Command: "true", Scrollback: 2})
+	if err != nil {
+		t.Fatalf("SessionWithConfig: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	_, _ = p.W.WriteString("one\ntwo\nthree\n")
+	if err := s.WaitForText("three", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	if got := s.Scrollback(10); len(got) != 2 || got[0] != "two" || got[1] != "three" {
+		t.Fatalf("Scrollback = %#v, want [\"two\", \"three\"]", got)
+	}
+}
+
+func TestSession_RecordAsciicast_WritesV2File(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	defer d.Close(s.ID) //nolint:errcheck
+
+	_, _ = p.W.WriteString("hello")
+	if err := s.WaitForText("hello", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "session.cast")
+	if err := s.RecordAsciicast(path); err != nil {
+		t.Fatalf("RecordAsciicast: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected header and event lines, got %q", string(data))
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if header.Version != 2 {
+		t.Fatalf("header version = %d, want 2", header.Version)
+	}
+	if !strings.Contains(lines[1], "hello") {
+		t.Fatalf("expected output event to contain hello, got %q", lines[1])
+	}
+}
+
+func TestDriver_RestoresPersistedSessions(t *testing.T) {
+	dir := t.TempDir()
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p), WithPersistenceDir(dir))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("persisted output\n")
+	if err := s.WaitForText("persisted output", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	restored := NewDriver(WithPersistenceDir(dir))
+	got := restored.Get(s.ID)
+	if got == nil {
+		t.Fatal("expected restored session, got nil")
+	}
+	if !strings.Contains(got.Text(), "persisted output") {
+		t.Fatalf("restored text = %q, want persisted output", got.Text())
+	}
+	if len(got.Scrollback(10)) == 0 {
+		t.Fatal("expected restored scrollback")
 	}
 }
 

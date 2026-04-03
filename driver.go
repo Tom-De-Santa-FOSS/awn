@@ -1,10 +1,13 @@
 package awn
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -18,9 +21,10 @@ const (
 
 // Driver manages terminal sessions.
 type Driver struct {
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	pty      PTYStarter
+	sessions       map[string]*Session
+	mu             sync.RWMutex
+	pty            PTYStarter
+	persistenceDir string
 }
 
 // NewDriver creates a new Driver.
@@ -32,6 +36,7 @@ func NewDriver(opts ...DriverOption) *Driver {
 	for _, opt := range opts {
 		opt(d)
 	}
+	d.loadPersistedSessions()
 	return d
 }
 
@@ -53,6 +58,9 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 	if cfg.Cols == 0 {
 		cfg.Cols = DefaultCols
 	}
+	if cfg.Scrollback == 0 {
+		cfg.Scrollback = 1000
+	}
 
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Env = append(os.Environ(),
@@ -71,12 +79,19 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 
 	id := uuid.New().String()
 	sess := &Session{
-		ID:      id,
-		cmd:     cmd,
-		ptmx:    ptmx,
-		term:    vt10x.New(vt10x.WithSize(cfg.Cols, cfg.Rows)),
-		done:    make(chan struct{}),
-		updated: make(chan struct{}, 1),
+		ID:        id,
+		cmd:       cmd,
+		ptmx:      ptmx,
+		term:      vt10x.New(vt10x.WithSize(cfg.Cols, cfg.Rows)),
+		done:      make(chan struct{}),
+		updated:   make(chan struct{}, 1),
+		cfg:       cfg,
+		history:   newHistoryBuffer(cfg.Scrollback),
+		startedAt: time.Now(),
+		updatedAt: time.Now(),
+	}
+	if d.persistenceDir != "" {
+		sess.persist = func() { d.persistSession(sess) }
 	}
 
 	d.mu.Lock()
@@ -85,6 +100,7 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 
 	sess.wg.Add(1)
 	go sess.readLoop()
+	d.persistSession(sess)
 
 	return sess, nil
 }
@@ -118,6 +134,7 @@ func (d *Driver) Close(id string) error {
 	}
 	delete(d.sessions, id)
 	d.mu.Unlock()
+	d.deletePersistedSession(id)
 
 	return sess.Close()
 }
@@ -139,8 +156,65 @@ func (d *Driver) CloseAll() {
 
 // Config holds session creation parameters.
 type Config struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-	Rows    int      `json:"rows,omitempty"`
-	Cols    int      `json:"cols,omitempty"`
+	Command    string   `json:"command"`
+	Args       []string `json:"args,omitempty"`
+	Rows       int      `json:"rows,omitempty"`
+	Cols       int      `json:"cols,omitempty"`
+	Scrollback int      `json:"scrollback,omitempty"`
+}
+
+func (d *Driver) persistSession(sess *Session) {
+	if d.persistenceDir == "" || sess == nil {
+		return
+	}
+	state := sess.persistentState()
+	if state == nil {
+		return
+	}
+	if err := os.MkdirAll(d.persistenceDir, 0o755); err != nil {
+		return
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(d.persistenceDir, sess.ID+".json"), data, 0o644)
+}
+
+func (d *Driver) deletePersistedSession(id string) {
+	if d.persistenceDir == "" {
+		return
+	}
+	_ = os.Remove(filepath.Join(d.persistenceDir, id+".json"))
+}
+
+func (d *Driver) loadPersistedSessions() {
+	if d.persistenceDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(d.persistenceDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(d.persistenceDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var state persistedSession
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		sess := newRestoredSession(&state)
+		if sess == nil {
+			continue
+		}
+		if d.persistenceDir != "" {
+			sess.persist = func() { d.persistSession(sess) }
+		}
+		d.sessions[sess.ID] = sess
+	}
 }

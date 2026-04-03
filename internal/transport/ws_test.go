@@ -146,6 +146,30 @@ func TestWebSocketUpgradeSucceedsWithCorrectToken(t *testing.T) {
 	_ = conn.Close()
 }
 
+func TestWebSocketUpgrade_UsesConfiguredConnectionLimit(t *testing.T) {
+	t.Setenv("AWN_MAX_CONNECTIONS", "1")
+	d := &mockDispatcher{}
+	srv := newTestServer(t, d, "")
+	defer srv.Close()
+
+	conn, _, err := dialWS(t, srv, "")
+	if err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	defer conn.Close() //nolint:errcheck
+
+	_, resp, err := dialWS(t, srv, "")
+	if err == nil {
+		t.Fatal("expected second dial to fail")
+	}
+	if resp == nil {
+		t.Fatal("expected HTTP response, got nil")
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
 func TestWebSocketUpgradeRejectedWithOriginHeader(t *testing.T) {
 	d := &mockDispatcher{}
 	srv := newTestServer(t, d, "")

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/tom/awn"
@@ -18,8 +19,14 @@ func main() {
 	flag.Parse()
 
 	token := os.Getenv("AWN_TOKEN")
+	stateDir := os.Getenv("AWN_STATE_DIR")
+	if stateDir == "" {
+		if cacheDir, err := os.UserCacheDir(); err == nil {
+			stateDir = filepath.Join(cacheDir, "awn", "sessions")
+		}
+	}
 
-	driver := awn.NewDriver()
+	driver := awn.NewDriver(awn.WithPersistenceDir(stateDir))
 	handler := rpc.NewHandler(driver, awtreestrategy.New())
 	server := transport.NewServer(handler, *addr, token)
 

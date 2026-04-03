@@ -94,6 +94,64 @@ func TestTool_create_dispatches_with_params(t *testing.T) {
 	}
 }
 
+func TestTool_create_args_string_becomes_array(t *testing.T) {
+	fake := &fakeDispatcher{
+		result: map[string]string{"id": "sess-456"},
+	}
+	s := newServer(fake)
+	tool := s.ListTools()["awn_create"]
+
+	// MCP sends args as a string (WithString schema), but RPC handler expects []string
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "awn_create"
+	req.Params.Arguments = map[string]any{
+		"command": "ls",
+		"args":    `["-la", "/tmp"]`,
+	}
+
+	_, err := tool.Handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(fake.params, &got); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+
+	// args must arrive as a JSON array, not a string
+	args, ok := got["args"].([]any)
+	if !ok {
+		t.Fatalf("args should be array, got %T: %v", got["args"], got["args"])
+	}
+	if len(args) != 2 || args[0] != "-la" || args[1] != "/tmp" {
+		t.Errorf("args = %v, want [-la /tmp]", args)
+	}
+}
+
+func TestTool_create_args_invalid_json_returns_error(t *testing.T) {
+	fake := &fakeDispatcher{
+		result: map[string]string{"id": "sess-789"},
+	}
+	s := newServer(fake)
+	tool := s.ListTools()["awn_create"]
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "awn_create"
+	req.Params.Arguments = map[string]any{
+		"command": "ls",
+		"args":    "not valid json",
+	}
+
+	result, err := tool.Handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler should not return go error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected IsError=true for invalid args JSON")
+	}
+}
+
 func TestTool_dispatch_error_returns_mcp_error_result(t *testing.T) {
 	fake := &fakeDispatcher{
 		err: errors.New("session not found"),

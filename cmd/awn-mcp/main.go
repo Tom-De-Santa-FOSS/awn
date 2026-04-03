@@ -39,10 +39,19 @@ func newServer(d rpc.Dispatcher) *server.MCPServer {
 	s.AddTool(mcp.NewTool("awn_create",
 		mcp.WithDescription("Create a new terminal session"),
 		mcp.WithString("command", mcp.Required(), mcp.Description("Command to run")),
-		mcp.WithString("args", mcp.Description("Command arguments as JSON array")),
+		mcp.WithString("args", mcp.Description("Command arguments as JSON array, e.g. [\"--flag\", \"value\"]")),
 		mcp.WithNumber("rows", mcp.Description("Terminal rows (default 24)")),
 		mcp.WithNumber("cols", mcp.Description("Terminal columns (default 80)")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		// MCP schema declares args as string; parse it into []string for the RPC handler.
+		args := req.GetArguments()
+		if raw, ok := args["args"].(string); ok && raw != "" {
+			var parsed []string
+			if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+				return mcp.NewToolResultError("args must be a JSON array of strings, e.g. [\"--flag\", \"value\"]"), nil
+			}
+			args["args"] = parsed
+		}
 		return dispatch(ctx, "create", req)
 	})
 

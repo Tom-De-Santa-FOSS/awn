@@ -220,16 +220,9 @@ func (s *Session) FindOne(strategy Strategy, match MatchFunc) (Element, error) {
 	return Element{}, fmt.Errorf("no matching element found")
 }
 
-// vt10xDefaultFG and vt10xDefaultBG are sentinel values reverse-engineered from
-// unexported constants in the vt10x library. They are not part of any public
-// API contract and may silently break if vt10x changes its internal color
-// representation in a future release.
-const (
-	vt10xDefaultFG = 1 << 24     // 0x1000000
-	vt10xDefaultBG = 1<<24 + 1   // 0x1000001
-)
 
-// vt10x Mode bit positions (from vt10x source, unexported).
+// vt10x Mode bit positions (from vt10x state.go attrReverse iota, unexported).
+// Pinned by TestMapAttrs_matches_vt10x_terminal regression test.
 const (
 	vt10xModeReverse   = 1 << 0
 	vt10xModeUnderline = 1 << 1
@@ -241,11 +234,10 @@ const (
 
 // mapColor converts a vt10x color to awn Color.
 func mapColor(c vt10x.Color) Color {
-	v := uint32(c)
-	if v == vt10xDefaultFG || v == vt10xDefaultBG {
+	if c == vt10x.DefaultFG || c == vt10x.DefaultBG {
 		return DefaultColor
 	}
-	return Color(int32(v))
+	return Color(int32(c))
 }
 
 func mapAttrs(mode int16) Attr {

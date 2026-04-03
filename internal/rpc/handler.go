@@ -53,6 +53,9 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 		previousLines: make(map[string][]string),
 	}
 	h.routes = map[string]func(json.RawMessage) (any, error){
+		"ping": func(_ json.RawMessage) (any, error) {
+			return h.Ping(), nil
+		},
 		"create": func(p json.RawMessage) (any, error) {
 			var req CreateRequest
 			if err := json.Unmarshal(p, &req); err != nil {
@@ -73,6 +76,13 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.Input(req)
+		},
+		"resize": func(p json.RawMessage) (any, error) {
+			var req ResizeRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.Resize(req)
 		},
 		"mouse_click": func(p json.RawMessage) (any, error) {
 			var req MouseRequest
@@ -143,6 +153,10 @@ type CreateResponse struct {
 	ID string `json:"id"`
 }
 
+type PingResponse struct {
+	Status string `json:"status"`
+}
+
 type IDRequest struct {
 	ID string `json:"id"`
 }
@@ -150,6 +164,12 @@ type IDRequest struct {
 type InputRequest struct {
 	ID   string `json:"id"`
 	Data string `json:"data"`
+}
+
+type ResizeRequest struct {
+	ID   string `json:"id"`
+	Rows int    `json:"rows"`
+	Cols int    `json:"cols"`
 }
 
 type MouseRequest struct {
@@ -289,6 +309,10 @@ func (h *Handler) Create(req CreateRequest) (*CreateResponse, error) {
 	return &CreateResponse{ID: s.ID}, nil
 }
 
+func (h *Handler) Ping() *PingResponse {
+	return &PingResponse{Status: "ok"}
+}
+
 func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
@@ -318,6 +342,14 @@ func (h *Handler) Input(req InputRequest) error {
 		return fmt.Errorf("session %q not found", req.ID)
 	}
 	return sess.SendKeys(req.Data)
+}
+
+func (h *Handler) Resize(req ResizeRequest) error {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return fmt.Errorf("session %q not found", req.ID)
+	}
+	return sess.Resize(req.Rows, req.Cols)
 }
 
 func (h *Handler) MouseClick(req MouseRequest) error {

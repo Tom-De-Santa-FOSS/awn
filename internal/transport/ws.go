@@ -190,9 +190,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		sem <- struct{}{} // backpressure: block if maxConcurrentDispatches handlers in-flight
 		wg.Add(1)
+		started := make(chan struct{})
 		go func(req JSONRPCRequest) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			close(started)
 
 			// Handle subscribe/unsubscribe if the handler supports it.
 			if sub, ok := s.handler.(Subscriber); ok && (req.Method == "subscribe" || req.Method == "unsubscribe") {
@@ -233,6 +235,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				log.Printf("write response: %v", err)
 			}
 		}(req)
+		<-started
 	}
 }
 

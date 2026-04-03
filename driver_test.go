@@ -506,6 +506,34 @@ func TestDriver_RestoresPersistedSessions(t *testing.T) {
 	}
 }
 
+func TestDriver_Close_RemovesPersistedSession(t *testing.T) {
+	dir := t.TempDir()
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p), WithPersistenceDir(dir))
+
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("closing output\n")
+	if err := s.WaitForText("closing output", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	if err := d.Close(s.ID); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	restored := NewDriver(WithPersistenceDir(dir))
+	if got := restored.Get(s.ID); got != nil {
+		t.Fatalf("expected closed session to stay deleted, got %#v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, s.ID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("expected persisted session file removed, stat err = %v", err)
+	}
+}
+
 // bidirPTY returns a writable file as ptmx for SendKeys testing.
 type bidirPTY struct {
 	ptmx *os.File

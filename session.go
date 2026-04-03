@@ -60,10 +60,11 @@ func (s *Session) readLoop() {
 		s.mu.Lock()
 		_, _ = s.term.Write(buf[:n])
 		s.appendOutput(buf[:n])
+		persist := s.persist
 		s.mu.Unlock()
 
-		if s.persist != nil {
-			s.persist()
+		if persist != nil {
+			persist()
 		}
 		select {
 		case s.updated <- struct{}{}:
@@ -71,6 +72,12 @@ func (s *Session) readLoop() {
 		}
 		s.notifySubscribers()
 	}
+}
+
+func (s *Session) stopPersisting() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persist = nil
 }
 
 // Text returns the plain text content of the terminal screen.

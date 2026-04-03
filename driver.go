@@ -134,9 +134,11 @@ func (d *Driver) Close(id string) error {
 	}
 	delete(d.sessions, id)
 	d.mu.Unlock()
-	d.deletePersistedSession(id)
+	sess.stopPersisting()
 
-	return sess.Close()
+	err := sess.Close()
+	d.deletePersistedSession(id)
+	return err
 }
 
 // CloseAll terminates all active sessions.

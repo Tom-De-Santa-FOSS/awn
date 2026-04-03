@@ -34,6 +34,19 @@ func (errorPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
 	return nil, os.ErrPermission
 }
 
+// newTestSession creates a Driver with a pipePTY and starts a session.
+// It returns the pipe, driver, and session. It calls t.Fatal on error.
+func newTestSession(t *testing.T) (*pipePTY, *Driver, *Session) {
+	t.Helper()
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	return p, d, s
+}
+
 func TestNewDriver_ListsZeroSessions(t *testing.T) {
 	d := NewDriver()
 	if got := d.List(); len(got) != 0 {
@@ -42,13 +55,7 @@ func TestNewDriver_ListsZeroSessions(t *testing.T) {
 }
 
 func TestDriver_Session_AppearsInList(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	if s.ID == "" {
 		t.Fatal("session ID is empty")
 	}
@@ -63,13 +70,7 @@ func TestDriver_Session_AppearsInList(t *testing.T) {
 }
 
 func TestSession_Text_ReturnsTerminalContent(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, _, s := newTestSession(t)
 
 	_, _ = p.W.WriteString("hello world")
 	if err := s.WaitForText("hello world", time.Second); err != nil {
@@ -82,13 +83,7 @@ func TestSession_Text_ReturnsTerminalContent(t *testing.T) {
 }
 
 func TestSession_WaitForText_FindsText(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, _, s := newTestSession(t)
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -101,28 +96,16 @@ func TestSession_WaitForText_FindsText(t *testing.T) {
 }
 
 func TestSession_WaitForText_Timeout(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
+	_, _, s := newTestSession(t)
 
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
-
-	err = s.WaitForText("never", 50*time.Millisecond)
+	err := s.WaitForText("never", 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 }
 
 func TestSession_WaitForStable_ReturnsWhenStable(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, _, s := newTestSession(t)
 
 	_, _ = p.W.WriteString("fixed content")
 	if err := s.WaitForText("fixed content", time.Second); err != nil {
@@ -135,13 +118,7 @@ func TestSession_WaitForStable_ReturnsWhenStable(t *testing.T) {
 }
 
 func TestSession_WaitForStable_TimeoutWhenChanging(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, _, s := newTestSession(t)
 
 	// Keep writing to prevent stability.
 	stop := make(chan struct{})
@@ -160,20 +137,14 @@ func TestSession_WaitForStable_TimeoutWhenChanging(t *testing.T) {
 	}()
 	defer close(stop)
 
-	err = s.WaitForStable(200*time.Millisecond, 100*time.Millisecond)
+	err := s.WaitForStable(200*time.Millisecond, 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 }
 
 func TestSession_Screen_ReturnsCorrectDimensions(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	screen := s.Screen()
@@ -238,13 +209,7 @@ func TestSession_Resize_LiveSessionUsesPTYResizer(t *testing.T) {
 }
 
 func TestSession_Screen_CapturesCharacterContent(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	_, _ = p.W.WriteString("hi")
@@ -261,108 +226,52 @@ func TestSession_Screen_CapturesCharacterContent(t *testing.T) {
 	}
 }
 
-func TestSession_Screen_CapturesReverseAttr(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
+func TestSession_Screen_CapturesAttributes(t *testing.T) {
+	tests := []struct {
+		name   string
+		escape string
+		char   rune
+		check  func(t *testing.T, cell Cell)
+	}{
+		{"Reverse", "\x1b[7mhi\x1b[0m", 'h', func(t *testing.T, cell Cell) {
+			if cell.Attrs&AttrReverse == 0 {
+				t.Errorf("expected AttrReverse, got attrs=%d", cell.Attrs)
+			}
+		}},
+		{"Bold", "\x1b[1mB\x1b[0m", 'B', func(t *testing.T, cell Cell) {
+			if cell.Attrs&AttrBold == 0 {
+				t.Errorf("expected AttrBold, got attrs=%d", cell.Attrs)
+			}
+		}},
+		{"Underline", "\x1b[4mU\x1b[0m", 'U', func(t *testing.T, cell Cell) {
+			if cell.Attrs&AttrUnderline == 0 {
+				t.Errorf("expected AttrUnderline, got attrs=%d", cell.Attrs)
+			}
+		}},
+		{"FGColor", "\x1b[31mr\x1b[0m", 'r', func(t *testing.T, cell Cell) {
+			if cell.FG == DefaultColor {
+				t.Error("expected non-default FG for red text")
+			}
+		}},
 	}
-
-	_, _ = p.W.WriteString("\x1b[7mhi\x1b[0m")
-	if err := s.WaitForText("hi", time.Second); err != nil {
-		t.Fatalf("WaitForText: %v", err)
-	}
-
-	scr := s.Screen()
-	cell := scr.Cells[0][0]
-	if cell.Char != 'h' {
-		t.Fatalf("char = %q, want 'h'", cell.Char)
-	}
-	if cell.Attrs&AttrReverse == 0 {
-		t.Errorf("expected AttrReverse, got attrs=%d", cell.Attrs)
-	}
-}
-
-func TestSession_Screen_CapturesBoldAttr(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
-
-	_, _ = p.W.WriteString("\x1b[1mB\x1b[0m")
-	if err := s.WaitForText("B", time.Second); err != nil {
-		t.Fatalf("WaitForText: %v", err)
-	}
-
-	cell := s.Screen().Cells[0][0]
-	if cell.Char != 'B' {
-		t.Fatalf("char = %q, want 'B'", cell.Char)
-	}
-	if cell.Attrs&AttrBold == 0 {
-		t.Errorf("expected AttrBold, got attrs=%d", cell.Attrs)
-	}
-}
-
-func TestSession_Screen_CapturesUnderlineAttr(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
-
-	_, _ = p.W.WriteString("\x1b[4mU\x1b[0m")
-	if err := s.WaitForText("U", time.Second); err != nil {
-		t.Fatalf("WaitForText: %v", err)
-	}
-
-	cell := s.Screen().Cells[0][0]
-	if cell.Char != 'U' {
-		t.Fatalf("char = %q, want 'U'", cell.Char)
-	}
-	if cell.Attrs&AttrUnderline == 0 {
-		t.Errorf("expected AttrUnderline, got attrs=%d", cell.Attrs)
-	}
-}
-
-func TestSession_Screen_CapturesFGColor(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
-
-	_, _ = p.W.WriteString("\x1b[31mr\x1b[0m")
-	if err := s.WaitForText("r", time.Second); err != nil {
-		t.Fatalf("WaitForText: %v", err)
-	}
-
-	scr := s.Screen()
-	cell := scr.Cells[0][0]
-	if cell.Char != 'r' {
-		t.Fatalf("char = %q, want 'r'", cell.Char)
-	}
-	if cell.FG == DefaultColor {
-		t.Error("expected non-default FG for red text")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, _, s := newTestSession(t)
+			_, _ = p.W.WriteString(tt.escape)
+			if err := s.WaitForText(string(tt.char), time.Second); err != nil {
+				t.Fatalf("WaitForText: %v", err)
+			}
+			cell := s.Screen().Cells[0][0]
+			if cell.Char != tt.char {
+				t.Fatalf("char = %q, want %q", cell.Char, tt.char)
+			}
+			tt.check(t, cell)
+		})
 	}
 }
 
 func TestSession_Close_RemovesFromDriver(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 
 	if err := d.Close(s.ID); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -482,13 +391,7 @@ func TestSession_Scrollback_ReturnsRecentLines(t *testing.T) {
 }
 
 func TestSession_RecordAsciicast_WritesV2File(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	p, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	_, _ = p.W.WriteString("hello")
@@ -589,13 +492,7 @@ func (b *bidirPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
 }
 
 func TestSession_ContainsText_EmptyString(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	if !s.ContainsText("") {
@@ -604,13 +501,7 @@ func TestSession_ContainsText_EmptyString(t *testing.T) {
 }
 
 func TestDriver_Get_ReturnsSession(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	got := d.Get(s.ID)
@@ -680,13 +571,7 @@ func TestDriver_SessionWithConfig_PTYStartError(t *testing.T) {
 }
 
 func TestSession_Close_NilProcess(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	// pipePTY doesn't start a real process, so cmd.Process is nil.
 	// Close should not panic.
 	if err := d.Close(s.ID); err != nil {
@@ -704,13 +589,7 @@ func (m *mockStrategy) Detect(screen *Screen) []Element {
 }
 
 func TestSession_FindAll_ReturnsMockElements(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	want := []Element{
@@ -731,13 +610,7 @@ func TestSession_FindAll_ReturnsMockElements(t *testing.T) {
 }
 
 func TestSession_FindOne_ReturnsFirstMatchingElement(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	elements := []Element{
@@ -756,20 +629,14 @@ func TestSession_FindOne_ReturnsFirstMatchingElement(t *testing.T) {
 }
 
 func TestSession_FindOne_ErrorWhenNoElementMatches(t *testing.T) {
-	p := &pipePTY{}
-	d := NewDriver(WithPTY(p))
-
-	s, err := d.Session("true")
-	if err != nil {
-		t.Fatalf("Session: %v", err)
-	}
+	_, d, s := newTestSession(t)
 	defer d.Close(s.ID) //nolint:errcheck
 
 	strategy := &mockStrategy{elements: []Element{
 		{Type: "button", Label: "OK"},
 	}}
 
-	_, err = s.FindOne(strategy, ByLabel("Cancel"))
+	_, err := s.FindOne(strategy, ByLabel("Cancel"))
 	if err == nil {
 		t.Fatal("expected error when no element matches, got nil")
 	}

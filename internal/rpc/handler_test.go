@@ -95,65 +95,36 @@ func TestDispatch_Ping(t *testing.T) {
 	}
 }
 
-func TestDispatch_ScreenshotNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("screenshot", json.RawMessage(`{"id":"nonexistent"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
+func TestDispatch_MethodNotFound_ForNonexistentSession(t *testing.T) {
+	tests := []struct {
+		name            string
+		method          string
+		params          string
+		rejectMethodErr bool
+		rejectParamsErr bool
+	}{
+		{name: "screenshot", method: "screenshot", params: `{"id":"nonexistent"}`},
+		{name: "detect", method: "detect", params: `{"id":"nonexistent"}`},
+		{name: "input", method: "input", params: `{"id":"nonexistent","data":"x"}`},
+		{name: "wait_for_text", method: "wait_for_text", params: `{"id":"nonexistent","text":"x"}`},
+		{name: "wait_for_stable", method: "wait_for_stable", params: `{"id":"nonexistent"}`},
+		{name: "close", method: "close", params: `{"id":"nonexistent"}`},
+		{name: "resize", method: "resize", params: `{"id":"nonexistent","rows":40,"cols":100}`, rejectMethodErr: true, rejectParamsErr: true},
 	}
-}
-
-func TestDispatch_DetectNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("detect", json.RawMessage(`{"id":"nonexistent"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-}
-
-func TestDispatch_InputNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("input", json.RawMessage(`{"id":"nonexistent","data":"x"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-}
-
-func TestDispatch_WaitForTextNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("wait_for_text", json.RawMessage(`{"id":"nonexistent","text":"x"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-}
-
-func TestDispatch_WaitForStableNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("wait_for_stable", json.RawMessage(`{"id":"nonexistent"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-}
-
-func TestDispatch_CloseNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("close", json.RawMessage(`{"id":"nonexistent"}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-}
-
-func TestDispatch_ResizeNotFound(t *testing.T) {
-	h := newTestHandler()
-	_, err := h.Dispatch("resize", json.RawMessage(`{"id":"nonexistent","rows":40,"cols":100}`))
-	if err == nil {
-		t.Fatalf("expected error for nonexistent session, got nil")
-	}
-	if strings.Contains(err.Error(), "method not found") {
-		t.Fatalf("expected resize route to exist, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "invalid params") {
-		t.Fatalf("expected resize params to be accepted, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestHandler()
+			_, err := h.Dispatch(tt.method, json.RawMessage(tt.params))
+			if err == nil {
+				t.Fatalf("expected error for nonexistent session, got nil")
+			}
+			if tt.rejectMethodErr && strings.Contains(err.Error(), "method not found") {
+				t.Fatalf("expected %s route to exist, got: %v", tt.method, err)
+			}
+			if tt.rejectParamsErr && strings.Contains(err.Error(), "invalid params") {
+				t.Fatalf("expected %s params to be accepted, got: %v", tt.method, err)
+			}
+		})
 	}
 }
 

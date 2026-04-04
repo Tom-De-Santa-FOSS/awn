@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: "!startsWith(github.event.head_commit.message, 'Bump version to')"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./... -race
+
+      - name: Bump patch version
+        run: |
+          ver=$(cat VERSION)
+          IFS='.' read -r major minor patch <<< "$ver"
+          new_ver="$major.$minor.$((patch + 1))"
+          echo "$new_ver" > VERSION
+          echo "VERSION=$new_ver" >> "$GITHUB_ENV"
+          echo "TAG=v$new_ver" >> "$GITHUB_ENV"
+
+      - name: Build all platforms
+        run: |
+          mkdir -p dist
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            GOOS="$os" GOARCH="$arch" go build -o dist/awn ./cmd/awn
+            GOOS="$os" GOARCH="$arch" go build -o dist/awnd ./cmd/awnd
+            GOOS="$os" GOARCH="$arch" go build -o dist/awn-mcp ./cmd/awn-mcp
+            tar czf "dist/awn-${os}-${arch}.tar.gz" -C dist awn awnd awn-mcp
+            rm -f dist/awn dist/awnd dist/awn-mcp
+          done
+
+      - name: Commit version bump and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "Bump version to $VERSION"
+          git tag "$TAG"
+          git push origin master --tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" dist/awn-*.tar.gz \
+            --title "$TAG" \
+            --generate-notes

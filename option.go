@@ -1,5 +1,7 @@
 package awn
 
+import "go.uber.org/zap"
+
 // DriverOption configures a Driver.
 type DriverOption func(*Driver)
 
@@ -14,5 +16,12 @@ func WithPTY(p PTYStarter) DriverOption {
 func WithPersistenceDir(dir string) DriverOption {
 	return func(d *Driver) {
 		d.persistenceDir = dir
+	}
+}
+
+// WithLogger sets the logger for the driver and its sessions.
+func WithLogger(l *zap.Logger) DriverOption {
+	return func(d *Driver) {
+		d.log = l
 	}
 }

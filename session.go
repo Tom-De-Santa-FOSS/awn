@@ -12,6 +12,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/hinshun/vt10x"
+	"go.uber.org/zap"
 )
 
 // Session wraps a running terminal application.
@@ -36,6 +37,14 @@ type Session struct {
 	updatedAt     time.Time
 	persist       func()
 	resizePTY     func(*os.File, *pty.Winsize) error
+	log           *zap.Logger
+}
+
+func (s *Session) logger() *zap.Logger {
+	if s.log == nil {
+		return zap.NewNop()
+	}
+	return s.log
 }
 
 // readBufPool reuses 32KB read buffers.
@@ -140,15 +149,18 @@ func containsTextLines(lines []string, text string) bool {
 
 // WaitForText blocks until text appears on screen or timeout elapses.
 func (s *Session) WaitForText(text string, timeout time.Duration) error {
+	s.logger().Debug("waiting for text", zap.String("text", text), zap.Duration("timeout", timeout))
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
 		if s.ContainsText(text) {
+			s.logger().Debug("text found", zap.String("text", text))
 			return nil
 		}
 		select {
 		case <-s.updated:
 		case <-timer.C:
+			s.logger().Warn("wait for text timed out", zap.String("text", text), zap.Duration("timeout", timeout))
 			return fmt.Errorf("timeout waiting for %q after %s", text, timeout)
 		case <-s.done:
 			return fmt.Errorf("session closed while waiting for %q", text)
@@ -159,6 +171,7 @@ func (s *Session) WaitForText(text string, timeout time.Duration) error {
 // WaitForStable blocks until the screen stops changing for the stable duration.
 // Only snapshots after an actual update signal to avoid unnecessary allocations.
 func (s *Session) WaitForStable(stable, timeout time.Duration) error {
+	s.logger().Debug("waiting for stable", zap.Duration("stable", stable), zap.Duration("timeout", timeout))
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
@@ -196,6 +209,7 @@ func (s *Session) WaitForStable(stable, timeout time.Duration) error {
 
 // WaitForGone blocks until text no longer appears on screen or timeout elapses.
 func (s *Session) WaitForGone(text string, timeout time.Duration) error {
+	s.logger().Debug("waiting for gone", zap.String("text", text), zap.Duration("timeout", timeout))
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
@@ -214,6 +228,7 @@ func (s *Session) WaitForGone(text string, timeout time.Duration) error {
 
 // WaitForRegex blocks until a regex pattern matches screen text or timeout elapses.
 func (s *Session) WaitForRegex(pattern string, timeout time.Duration) error {
+	s.logger().Debug("waiting for regex", zap.String("pattern", pattern), zap.Duration("timeout", timeout))
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return fmt.Errorf("invalid regex %q: %w", pattern, err)
@@ -383,6 +398,7 @@ func (s *Session) SendKeys(data string) error {
 	if s.restored {
 		return fmt.Errorf("session %q is restored snapshot only", s.ID)
 	}
+	s.logger().Debug("send keys", zap.Int("len", len(data)))
 	_, err := s.ptmx.WriteString(data)
 	return err
 }
@@ -399,6 +415,7 @@ func (s *Session) SendMouseClick(row, col, button int) error {
 }
 
 func (s *Session) Resize(rows, cols int) error {
+	s.logger().Debug("resize", zap.Int("rows", rows), zap.Int("cols", cols))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

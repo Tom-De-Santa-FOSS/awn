@@ -19,12 +19,6 @@ func New(addr string) *Client {
 	return &Client{addr: addr}
 }
 
-func (c *Client) WithToken(token string) *Client {
-	clone := *c
-	clone.token = token
-	return &clone
-}
-
 func (c *Client) Ping() (*rpc.PingResponse, error) {
 	var resp rpc.PingResponse
 	if err := c.call("ping", nil, &resp); err != nil {

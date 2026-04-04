@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="awn-logo.png" alt="awn logo" width="200" />
+</p>
+
 # awn
 
 TUI automation for AI agents. Manage headless terminal sessions — screenshot, send input, detect UI elements, and wait on terminal state.
@@ -96,7 +100,6 @@ awn pipeline <id> '[                           # batch multiple steps
 awn detect <id>                        # accessibility tree
 awn resize <id> 40 120                 # resize session rows/cols
 awn record <id> session.cast           # write asciicast v2 recording
-awn watch <id>                         # live session viewer
 ```
 
 ## Go SDK

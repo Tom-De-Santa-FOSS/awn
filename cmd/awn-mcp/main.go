@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -137,16 +136,29 @@ func newServer(d rpc.Dispatcher) *server.MCPServer {
 		mcp.WithString("text", mcp.Required(), mcp.Description("Text to wait for")),
 		mcp.WithNumber("timeout_ms", mcp.Description("Timeout in milliseconds (default 5000)")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return dispatch(ctx, "wait_for_text", req)
+		return dispatch(ctx, "wait", req)
 	})
 
 	s.AddTool(mcp.NewTool("awn_wait_for_stable",
 		mcp.WithDescription("Wait until the screen stops changing"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
-		mcp.WithNumber("stable_ms", mcp.Description("Stability duration in ms (default 500)")),
 		mcp.WithNumber("timeout_ms", mcp.Description("Timeout in milliseconds (default 5000)")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		return dispatch(ctx, "wait_for_stable", req)
+		args := req.GetArguments()
+		args["stable"] = true
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		result, derr := d.Dispatch("wait", json.RawMessage(raw))
+		if derr != nil {
+			return mcp.NewToolResultError(derr.Error()), nil
+		}
+		out, err := json.Marshal(result)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(string(out)), nil
 	})
 
 	s.AddTool(mcp.NewTool("awn_detect",
@@ -186,6 +198,6 @@ func main() {
 	}()
 
 	if err := server.ServeStdio(s); err != nil {
-		log.Fatal(err)
+		os.Exit(1)
 	}
 }

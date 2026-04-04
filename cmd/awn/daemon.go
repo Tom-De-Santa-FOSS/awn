@@ -65,8 +65,7 @@ func daemonStart(addr string) (string, error) {
 	_ = cmd.Process.Release()
 
 	// Poll for readiness
-	for i := range 50 {
-		_ = i
+	for range 50 {
 		time.Sleep(100 * time.Millisecond)
 		if conn, err := net.DialTimeout("tcp", host, 200*time.Millisecond); err == nil {
 			conn.Close()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 )
 
 // mockDispatcher is a test double for the Dispatcher interface.
@@ -51,7 +52,7 @@ func dialWSWithOrigin(t *testing.T, srv *httptest.Server, origin string) (*webso
 
 func newTestServer(t *testing.T, d Dispatcher, token string) *httptest.Server {
 	t.Helper()
-	s := NewServer(d, "", token)
+	s := NewServer(d, "", token, zap.NewNop())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleWS)
 	mux.HandleFunc("/health", s.handleHealth)

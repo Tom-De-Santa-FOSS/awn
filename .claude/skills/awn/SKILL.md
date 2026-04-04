@@ -149,7 +149,6 @@ Returns elements with `Type`, `Label`, `Bounds` (Row, Col, Width, Height), and `
 ```bash
 awn resize <id> 40 120                 # resize session rows/cols
 awn record <id> session.cast           # write asciicast v2 recording
-awn watch <id>                         # live session viewer
 ```
 
 ## Common Patterns
@@ -226,14 +225,10 @@ JSON-RPC 2.0 over WebSocket at `127.0.0.1:7600`.
 | `mouse_move` | `{id, row, col}` | `null` |
 | `exec` | `{id, input, wait_text?, timeout_ms?}` | `{screen}` |
 | `wait` | `{id, text?, stable?, gone?, regex?, timeout_ms?}` | `null` |
-| `wait_for_text` | `{id, text, timeout_ms?}` | `null` |
-| `wait_for_stable` | `{id, stable_ms?, timeout_ms?}` | `null` |
 | `pipeline` | `{id, steps, stop_on_error?}` | `{results}` |
 | `record` | `{id, path}` | `null` |
 | `close` | `{id}` | `null` |
 | `list` | none | `{sessions}` |
-| `subscribe` | `{id}` | real-time screen update notifications |
-| `unsubscribe` | `{id}` | stop receiving updates |
 
 ## Authentication
 

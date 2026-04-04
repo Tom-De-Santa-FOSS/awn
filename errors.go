@@ -46,23 +46,3 @@ func ErrValidation(msg string) *AwnError {
 	}
 }
 
-// ErrSessionNotRunning returns a structured error when a session process has exited.
-func ErrSessionNotRunning(id string) *AwnError {
-	return &AwnError{
-		Code:       "SESSION_NOT_RUNNING",
-		Category:   "session",
-		Message:    fmt.Sprintf("session %q process is not running", id),
-		Retryable:  false,
-		Suggestion: "the session process has exited; create a new session",
-	}
-}
-
-// ErrTerminal returns a structured error for terminal emulation issues.
-func ErrTerminal(msg string) *AwnError {
-	return &AwnError{
-		Code:      "TERMINAL_ERROR",
-		Category:  "terminal",
-		Message:   msg,
-		Retryable: false,
-	}
-}

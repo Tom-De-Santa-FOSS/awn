@@ -8,9 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
-    if: "!startsWith(github.event.head_commit.message, 'Bump version to')"
     steps:
       - uses: actions/checkout@v4
 
@@ -21,16 +20,26 @@ jobs:
       - name: Run tests
         run: go test ./... -race
 
-      - name: Bump patch version
-        run: |
-          ver=$(cat VERSION)
-          IFS='.' read -r major minor patch <<< "$ver"
-          new_ver="$major.$minor.$((patch + 1))"
-          echo "$new_ver" > VERSION
-          echo "VERSION=$new_ver" >> "$GITHUB_ENV"
-          echo "TAG=v$new_ver" >> "$GITHUB_ENV"
+  release:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: go-semantic-release/action@v1
+        id: semrel
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          changelog-generator-opt: "emojis=true"
 
       - name: Build all platforms
+        if: steps.semrel.outputs.version != ''
         run: |
           mkdir -p dist
           for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
@@ -43,19 +52,8 @@ jobs:
             rm -f dist/awn dist/awnd dist/awn-mcp
           done
 
-      - name: Commit version bump and tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION
-          git commit -m "Bump version to $VERSION"
-          git tag "$TAG"
-          git push origin master --tags
-
-      - name: Create GitHub release
+      - name: Upload release assets
+        if: steps.semrel.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "$TAG" dist/awn-*.tar.gz \
-            --title "$TAG" \
-            --generate-notes
+        run: gh release upload "v${{ steps.semrel.outputs.version }}" dist/awn-*.tar.gz

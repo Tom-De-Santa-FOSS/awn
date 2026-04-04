@@ -10,7 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func TestNewServer_registers_all_eight_tools(t *testing.T) {
+func TestNewServer_registers_all_tools(t *testing.T) {
 	s := newServer(nil)
 	tools := s.ListTools()
 
@@ -18,9 +18,12 @@ func TestNewServer_registers_all_eight_tools(t *testing.T) {
 		"awn_close",
 		"awn_create",
 		"awn_detect",
+		"awn_exec",
 		"awn_input",
 		"awn_list",
+		"awn_press",
 		"awn_screenshot",
+		"awn_type",
 		"awn_wait_for_stable",
 		"awn_wait_for_text",
 	}

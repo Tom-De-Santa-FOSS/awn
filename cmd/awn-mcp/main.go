@@ -11,7 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/tom/awn"
+	awn "github.com/tom/awn"
 	"github.com/tom/awn/awtreestrategy"
 	"github.com/tom/awn/internal/rpc"
 )
@@ -64,11 +64,71 @@ func newServer(d rpc.Dispatcher) *server.MCPServer {
 	})
 
 	s.AddTool(mcp.NewTool("awn_input",
-		mcp.WithDescription("Send input to a terminal session"),
+		mcp.WithDescription("Send raw input to a terminal session"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
-		mcp.WithString("data", mcp.Required(), mcp.Description("Text or key sequence to send")),
+		mcp.WithString("data", mcp.Required(), mcp.Description("Raw text or escape sequence to send")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return dispatch(ctx, "input", req)
+	})
+
+	s.AddTool(mcp.NewTool("awn_type",
+		mcp.WithDescription("Type text into a terminal session (no Enter appended)"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
+		mcp.WithString("text", mcp.Required(), mcp.Description("Text to type")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		text, _ := args["text"].(string)
+		raw, err := json.Marshal(map[string]any{"id": args["id"], "data": text})
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		result, derr := d.Dispatch("input", json.RawMessage(raw))
+		if derr != nil {
+			return mcp.NewToolResultError(derr.Error()), nil
+		}
+		out, err := json.Marshal(result)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultText(string(out)), nil
+	})
+
+	s.AddTool(mcp.NewTool("awn_press",
+		mcp.WithDescription("Send named key presses (e.g. Enter, Ctrl+C, ArrowUp)"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
+		mcp.WithString("keys", mcp.Required(), mcp.Description("Key names as JSON array, e.g. [\"Enter\"] or [\"Ctrl+C\", \"Enter\"]")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		id, _ := args["id"].(string)
+		keysRaw, _ := args["keys"].(string)
+		var keys []string
+		if err := json.Unmarshal([]byte(keysRaw), &keys); err != nil {
+			return mcp.NewToolResultError("keys must be a JSON array, e.g. [\"Enter\"]"), nil
+		}
+		for _, key := range keys {
+			seq, ok := awn.ResolveKey(key)
+			if !ok {
+				return mcp.NewToolResultError("unknown key: " + key), nil
+			}
+			raw, err := json.Marshal(map[string]any{"id": id, "data": seq})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if _, derr := d.Dispatch("input", json.RawMessage(raw)); derr != nil {
+				return mcp.NewToolResultError(derr.Error()), nil
+			}
+		}
+		return mcp.NewToolResultText("ok"), nil
+	})
+
+	s.AddTool(mcp.NewTool("awn_exec",
+		mcp.WithDescription("Type input, press Enter, and wait for output to stabilize or specific text"),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
+		mcp.WithString("input", mcp.Required(), mcp.Description("Command or text to type and execute")),
+		mcp.WithString("wait_text", mcp.Description("Wait for this text to appear (default: wait for stable screen)")),
+		mcp.WithNumber("timeout_ms", mcp.Description("Timeout in milliseconds (default 5000)")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return dispatch(ctx, "exec", req)
 	})
 
 	s.AddTool(mcp.NewTool("awn_wait_for_text",

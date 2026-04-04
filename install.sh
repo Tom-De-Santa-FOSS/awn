@@ -72,6 +72,21 @@ install_skill() {
     "https://raw.githubusercontent.com/${REPO}/v${VERSION}/.claude/skills/awn/SKILL.md"
 }
 
+prompt_skill() {
+  if [ "${AWN_SKIP_SKILL:-0}" = "1" ]; then
+    return 1
+  fi
+  # When piped from curl, stdin is the pipe — read from /dev/tty instead.
+  # If /dev/tty is unavailable (CI, containers), default to yes.
+  printf "Install Claude Code skill to ~/.claude/skills/awn? [Y/n] " > /dev/tty 2>/dev/null || printf "Install Claude Code skill to ~/.claude/skills/awn? [Y/n] "
+  local answer=""
+  read -r answer < /dev/tty 2>/dev/null || read -r answer 2>/dev/null || answer="y"
+  case "$answer" in
+    [nN]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # Allow sourcing without executing main
 if [ "${1:-}" = "--source-only" ]; then
   return 0 2>/dev/null || true
@@ -90,9 +105,15 @@ main() {
   echo "Version: $VERSION | OS: $os | Arch: $arch"
 
   do_install "$os" "$arch"
-  install_skill
   echo "Installed awn and awnd to $INSTALL_DIR"
-  echo "Installed Claude Code skill to ${HOME}/.claude/skills/awn/SKILL.md"
+
+  if prompt_skill; then
+    install_skill
+    echo "Installed Claude Code skill to ~/.claude/skills/awn/SKILL.md"
+  else
+    echo "Skipped Claude Code skill installation."
+  fi
+
   echo ""
   echo "Make sure $INSTALL_DIR is in your PATH."
 }

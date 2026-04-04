@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -189,6 +190,46 @@ func (s *Session) WaitForStable(stable, timeout time.Duration) error {
 		case <-s.done:
 			stableTimer.Stop()
 			return fmt.Errorf("session closed while waiting for stability")
+		}
+	}
+}
+
+// WaitForGone blocks until text no longer appears on screen or timeout elapses.
+func (s *Session) WaitForGone(text string, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		if !s.ContainsText(text) {
+			return nil
+		}
+		select {
+		case <-s.updated:
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for %q to disappear after %s", text, timeout)
+		case <-s.done:
+			return fmt.Errorf("session closed while waiting for %q to disappear", text)
+		}
+	}
+}
+
+// WaitForRegex blocks until a regex pattern matches screen text or timeout elapses.
+func (s *Session) WaitForRegex(pattern string, timeout time.Duration) error {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex %q: %w", pattern, err)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		if re.MatchString(s.Text()) {
+			return nil
+		}
+		select {
+		case <-s.updated:
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for pattern %q after %s", pattern, timeout)
+		case <-s.done:
+			return fmt.Errorf("session closed while waiting for pattern %q", pattern)
 		}
 	}
 }

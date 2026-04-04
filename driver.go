@@ -1,16 +1,18 @@
 package awn
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/google/uuid"
 	"github.com/hinshun/vt10x"
 )
 
@@ -77,7 +79,7 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 		return nil, fmt.Errorf("pty start: %w", err)
 	}
 
-	id := uuid.New().String()
+	id := shortID()
 	sess := &Session{
 		ID:        id,
 		cmd:       cmd,
@@ -117,27 +119,73 @@ func (d *Driver) List() []string {
 	return ids
 }
 
-// Get returns a session by ID, or nil if not found.
+// shortID generates a random 8-character hex string.
+func shortID() string {
+	var b [4]byte
+	for i := range b {
+		b[i] = byte(rand.IntN(256))
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// Get returns a session by ID or unique prefix, or nil if not found.
 func (d *Driver) Get(id string) *Session {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.sessions[id]
+	return d.findSession(id)
 }
 
-// Close terminates a session by ID.
+// findSession looks up by exact match first, then prefix match.
+// Must be called with d.mu held.
+func (d *Driver) findSession(id string) *Session {
+	if s, ok := d.sessions[id]; ok {
+		return s
+	}
+	var match *Session
+	for sid, s := range d.sessions {
+		if strings.HasPrefix(sid, id) {
+			if match != nil {
+				return nil // ambiguous prefix
+			}
+			match = s
+		}
+	}
+	return match
+}
+
+// resolveID returns the full session ID for an exact or prefix match.
+// Must be called with d.mu held.
+func (d *Driver) resolveID(id string) (string, bool) {
+	if _, ok := d.sessions[id]; ok {
+		return id, true
+	}
+	var found string
+	for sid := range d.sessions {
+		if strings.HasPrefix(sid, id) {
+			if found != "" {
+				return "", false // ambiguous
+			}
+			found = sid
+		}
+	}
+	return found, found != ""
+}
+
+// Close terminates a session by ID or unique prefix.
 func (d *Driver) Close(id string) error {
 	d.mu.Lock()
-	sess, ok := d.sessions[id]
+	fullID, ok := d.resolveID(id)
 	if !ok {
 		d.mu.Unlock()
 		return fmt.Errorf("session %q not found", id)
 	}
-	delete(d.sessions, id)
+	sess := d.sessions[fullID]
+	delete(d.sessions, fullID)
 	d.mu.Unlock()
 	sess.stopPersisting()
 
 	err := sess.Close()
-	d.deletePersistedSession(id)
+	d.deletePersistedSession(fullID)
 	return err
 }
 

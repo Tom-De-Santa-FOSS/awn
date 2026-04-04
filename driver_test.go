@@ -641,3 +641,115 @@ func TestSession_FindOne_ErrorWhenNoElementMatches(t *testing.T) {
 		t.Fatal("expected error when no element matches, got nil")
 	}
 }
+
+func TestSession_ID_IsShortHex(t *testing.T) {
+	_, _, s := newTestSession(t)
+	if len(s.ID) != 8 {
+		t.Fatalf("expected 8-char ID, got %d chars: %q", len(s.ID), s.ID)
+	}
+	for _, c := range s.ID {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Fatalf("ID %q contains non-hex char %c", s.ID, c)
+		}
+	}
+}
+
+func TestDriver_Get_PrefixMatch(t *testing.T) {
+	_, d, s := newTestSession(t)
+	defer d.Close(s.ID) //nolint:errcheck
+
+	// Full ID should work
+	if got := d.Get(s.ID); got == nil {
+		t.Fatal("full ID lookup failed")
+	}
+
+	// Prefix (first 4 chars) should work
+	prefix := s.ID[:4]
+	if got := d.Get(prefix); got == nil {
+		t.Fatalf("prefix %q lookup failed", prefix)
+	}
+	if got := d.Get(prefix); got.ID != s.ID {
+		t.Fatalf("prefix match returned %q, want %q", got.ID, s.ID)
+	}
+}
+
+func TestDriver_Close_PrefixMatch(t *testing.T) {
+	p := &pipePTY{}
+	d := NewDriver(WithPTY(p))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	prefix := s.ID[:4]
+	if err := d.Close(prefix); err != nil {
+		t.Fatalf("Close with prefix %q: %v", prefix, err)
+	}
+	if len(d.List()) != 0 {
+		t.Fatal("expected 0 sessions after close")
+	}
+}
+
+func TestSession_WaitForGone_ReturnsWhenTextDisappears(t *testing.T) {
+	p, _, s := newTestSession(t)
+
+	_, _ = p.W.WriteString("loading...")
+	if err := s.WaitForText("loading", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		// Overwrite with spaces using carriage return
+		_, _ = p.W.WriteString("\rdone!           ")
+	}()
+
+	if err := s.WaitForGone("loading", time.Second); err != nil {
+		t.Fatalf("WaitForGone: %v", err)
+	}
+}
+
+func TestSession_WaitForGone_Timeout(t *testing.T) {
+	p, _, s := newTestSession(t)
+
+	_, _ = p.W.WriteString("persistent")
+	if err := s.WaitForText("persistent", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	err := s.WaitForGone("persistent", 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestSession_WaitForRegex_FindsPattern(t *testing.T) {
+	p, _, s := newTestSession(t)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_, _ = p.W.WriteString("version 2.3.4")
+	}()
+
+	if err := s.WaitForRegex(`version \d+\.\d+\.\d+`, time.Second); err != nil {
+		t.Fatalf("WaitForRegex: %v", err)
+	}
+}
+
+func TestSession_WaitForRegex_Timeout(t *testing.T) {
+	_, _, s := newTestSession(t)
+
+	err := s.WaitForRegex(`never\d+`, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestSession_WaitForRegex_InvalidPattern(t *testing.T) {
+	_, _, s := newTestSession(t)
+
+	err := s.WaitForRegex(`[invalid`, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error for invalid regex")
+	}
+}

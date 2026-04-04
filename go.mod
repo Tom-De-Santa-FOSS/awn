@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/Tom-De-Santa-FOSS/awtree v0.0.0
+	github.com/Tom-De-Santa-FOSS/awtree v0.1.0
 	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/mark3labs/mcp-go v0.46.0
 	github.com/stretchr/testify v1.9.0
@@ -24,5 +24,3 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/Tom-De-Santa-FOSS/awtree => ../awtree

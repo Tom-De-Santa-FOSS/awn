@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
+	"github.com/tom/awn"
 	"github.com/tom/awn/internal/rpc"
 )
 
@@ -69,6 +70,7 @@ type JSONRPCResponse struct {
 type JSONRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // Server serves JSON-RPC 2.0 over WebSocket.
@@ -211,12 +213,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				log.Printf("dispatch %s: %v", req.Method, err)
 				code := -32603
 				msg := "internal error"
+				var errData any
 				var rpcErr *rpc.RPCError
+				var awnErr *awn.AwnError
 				if errors.As(err, &rpcErr) {
 					code = rpcErr.Code
 					msg = rpcErr.Err.Error()
+				} else if errors.As(err, &awnErr) {
+					code = -32000 // application error
+					msg = awnErr.Message
+					errData = awnErr
 				}
-				s.sendError(conn, req.ID, code, msg)
+				s.sendErrorWithData(conn, req.ID, code, msg, errData)
 				return
 			}
 
@@ -331,17 +339,21 @@ func (s *Server) handleSubscription(conn *websocket.Conn, wmu, subsMu *sync.Mute
 }
 
 func (s *Server) sendError(conn *websocket.Conn, id any, code int, msg string) {
+	s.sendErrorWithData(conn, id, code, msg, nil)
+}
+
+func (s *Server) sendErrorWithData(conn *websocket.Conn, id any, code int, msg string, errData any) {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
-		Error:   &JSONRPCError{Code: code, Message: msg},
+		Error:   &JSONRPCError{Code: code, Message: msg, Data: errData},
 		ID:      id,
 	}
-	data, err := json.Marshal(resp)
+	raw, err := json.Marshal(resp)
 	if err != nil {
 		log.Printf("marshal error response: %v", err)
 		return
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
 		log.Printf("write error response: %v", err)
 	}
 }

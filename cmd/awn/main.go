@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
+	"github.com/tom/awn"
 )
 
 type rpcCaller func(addr, method string, params any) (string, error)
@@ -33,6 +34,24 @@ func run(args []string, caller rpcCaller) (string, error) {
 		addr = "ws://localhost:7600"
 	}
 
+	// Parse global flags
+	jsonOutput := false
+	var remaining []string
+	for _, arg := range args {
+		switch arg {
+		case "--json", "-j":
+			jsonOutput = true
+		default:
+			remaining = append(remaining, arg)
+		}
+	}
+	args = remaining
+	_ = jsonOutput // used by screenshot to force JSON output
+
+	if len(args) < 1 {
+		return "", fmt.Errorf("usage: awn <command>")
+	}
+
 	cmd := args[0]
 
 	switch cmd {
@@ -54,7 +73,7 @@ func run(args []string, caller rpcCaller) (string, error) {
 			return "", fmt.Errorf("usage: awn screenshot <session-id> [--json] [--diff] [--scrollback N]")
 		}
 		params := map[string]any{"id": args[1]}
-		printJSON := false
+		printJSON := jsonOutput
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
 			case "--json":
@@ -94,6 +113,62 @@ func run(args []string, caller rpcCaller) (string, error) {
 			return "", fmt.Errorf("parse screenshot: %w", err)
 		}
 		return strings.Join(snap.Lines, "\n") + "\n", nil
+	case "press":
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn press <session-id> <key> [key...]")
+		}
+		for _, key := range args[2:] {
+			seq, ok := awn.ResolveKey(key)
+			if !ok {
+				return "", fmt.Errorf("unknown key: %s", key)
+			}
+			_, err := caller(addr, "input", map[string]any{"id": args[1], "data": seq})
+			if err != nil {
+				return "", err
+			}
+		}
+		return "ok\n", nil
+	case "type":
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn type <session-id> <text>")
+		}
+		_, err := caller(addr, "input", map[string]any{"id": args[1], "data": args[2]})
+		if err != nil {
+			return "", err
+		}
+		return "ok\n", nil
+	case "exec":
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn exec <session-id> <input> [--timeout <ms>] [--wait-text <text>]")
+		}
+		params := map[string]any{"id": args[1], "input": args[2]}
+		for i := 3; i < len(args); i++ {
+			switch args[i] {
+			case "--timeout":
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --timeout")
+				}
+				ms, err := strconv.Atoi(args[i])
+				if err != nil {
+					return "", fmt.Errorf("invalid --timeout value: %s", args[i])
+				}
+				params["timeout_ms"] = ms
+			case "--wait-text":
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --wait-text")
+				}
+				params["wait_text"] = args[i]
+			default:
+				return "", fmt.Errorf("unknown exec flag: %s", args[i])
+			}
+		}
+		result, err := caller(addr, "exec", params)
+		if err != nil {
+			return "", err
+		}
+		return result + "\n", nil
 	case "input":
 		if len(args) < 3 {
 			return "", fmt.Errorf("usage: awn input <session-id> <text>")
@@ -163,9 +238,51 @@ func run(args []string, caller rpcCaller) (string, error) {
 		return "ok\n", nil
 	case "wait":
 		if len(args) < 3 {
-			return "", fmt.Errorf("usage: awn wait <session-id> <text>")
+			return "", fmt.Errorf("usage: awn wait <session-id> [--text <text>] [--stable] [--gone <text>] [--regex <pattern>] [--timeout <ms>]")
 		}
-		_, err := caller(addr, "wait_for_text", map[string]any{"id": args[1], "text": args[2]})
+		params := map[string]any{"id": args[1]}
+		// If args[2] doesn't start with --, treat as backwards-compat positional text
+		if len(args) == 3 && !strings.HasPrefix(args[2], "--") {
+			params["text"] = args[2]
+		} else {
+			for i := 2; i < len(args); i++ {
+				switch args[i] {
+				case "--text":
+					i++
+					if i >= len(args) {
+						return "", fmt.Errorf("missing value for --text")
+					}
+					params["text"] = args[i]
+				case "--stable":
+					params["stable"] = true
+				case "--gone":
+					i++
+					if i >= len(args) {
+						return "", fmt.Errorf("missing value for --gone")
+					}
+					params["gone"] = args[i]
+				case "--regex":
+					i++
+					if i >= len(args) {
+						return "", fmt.Errorf("missing value for --regex")
+					}
+					params["regex"] = args[i]
+				case "--timeout":
+					i++
+					if i >= len(args) {
+						return "", fmt.Errorf("missing value for --timeout")
+					}
+					ms, err := strconv.Atoi(args[i])
+					if err != nil {
+						return "", fmt.Errorf("invalid --timeout value: %s", args[i])
+					}
+					params["timeout_ms"] = ms
+				default:
+					return "", fmt.Errorf("unknown wait flag: %s", args[i])
+				}
+			}
+		}
+		_, err := caller(addr, "wait", params)
 		if err != nil {
 			return "", err
 		}
@@ -215,8 +332,33 @@ func run(args []string, caller rpcCaller) (string, error) {
 		}
 		watch(addr, args[1])
 		return "", nil
+	case "pipeline":
+		if len(args) < 3 {
+			return "", fmt.Errorf("usage: awn pipeline <session-id> '<steps-json>'")
+		}
+		var steps []any
+		if err := json.Unmarshal([]byte(args[2]), &steps); err != nil {
+			return "", fmt.Errorf("invalid steps JSON: %w", err)
+		}
+		params := map[string]any{"id": args[1], "steps": steps}
+		// Check for optional --stop-on-error flag
+		for i := 3; i < len(args); i++ {
+			if args[i] == "--stop-on-error" {
+				params["stop_on_error"] = true
+			}
+		}
+		result, err := caller(addr, "pipeline", params)
+		if err != nil {
+			return "", err
+		}
+		return result + "\n", nil
+	case "daemon":
+		if len(args) < 2 {
+			return "", fmt.Errorf("usage: awn daemon <start|stop|status>")
+		}
+		return runDaemon(args[1:], addr, caller)
 	default:
-		return "", fmt.Errorf("unknown command: %s", cmd)
+		return "", fmt.Errorf("unknown command: %s\n\nCommands:\n  create, screenshot, input, press, type, exec, resize,\n  mouse-click, mouse-move, wait, detect, close,\n  list, record, ping, watch, daemon", cmd)
 	}
 }
 

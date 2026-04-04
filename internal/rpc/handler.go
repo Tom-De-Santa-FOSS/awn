@@ -70,6 +70,13 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 			}
 			return h.Screenshot(req)
 		},
+		"exec": func(p json.RawMessage) (any, error) {
+			var req ExecRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return h.Exec(req)
+		},
 		"input": func(p json.RawMessage) (any, error) {
 			var req InputRequest
 			if err := json.Unmarshal(p, &req); err != nil {
@@ -97,6 +104,13 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.MouseMove(req)
+		},
+		"wait": func(p json.RawMessage) (any, error) {
+			var req WaitRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return nil, h.Wait(req)
 		},
 		"wait_for_text": func(p json.RawMessage) (any, error) {
 			var req WaitTextRequest
@@ -132,6 +146,13 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.Record(req)
+		},
+		"pipeline": func(p json.RawMessage) (any, error) {
+			var req PipelineRequest
+			if err := json.Unmarshal(p, &req); err != nil {
+				return nil, errBadParams(err)
+			}
+			return h.Pipeline(req)
 		},
 		"list": func(_ json.RawMessage) (any, error) {
 			return h.List()
@@ -184,6 +205,26 @@ type RecordRequest struct {
 	Path string `json:"path"`
 }
 
+type ExecRequest struct {
+	ID       string `json:"id"`
+	Input    string `json:"input"`
+	WaitText string `json:"wait_text,omitempty"`
+	Timeout  int    `json:"timeout_ms,omitempty"`
+}
+
+type ExecResponse struct {
+	Screen *ScreenResponse `json:"screen"`
+}
+
+type WaitRequest struct {
+	ID      string `json:"id"`
+	Text    string `json:"text,omitempty"`
+	Stable  bool   `json:"stable,omitempty"`
+	Gone    string `json:"gone,omitempty"`
+	Regex   string `json:"regex,omitempty"`
+	Timeout int    `json:"timeout_ms,omitempty"`
+}
+
 type WaitTextRequest struct {
 	ID      string `json:"id"`
 	Text    string `json:"text"`
@@ -194,6 +235,34 @@ type WaitStableRequest struct {
 	ID      string `json:"id"`
 	Stable  int    `json:"stable_ms,omitempty"`
 	Timeout int    `json:"timeout_ms,omitempty"`
+}
+
+type PipelineRequest struct {
+	ID          string         `json:"id"`
+	Steps       []PipelineStep `json:"steps"`
+	StopOnError bool           `json:"stop_on_error,omitempty"`
+}
+
+type PipelineStep struct {
+	Type    string `json:"type"`
+	Input   string `json:"input,omitempty"`
+	Keys    string `json:"keys,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Stable  bool   `json:"stable,omitempty"`
+	Gone    string `json:"gone,omitempty"`
+	Regex   string `json:"regex,omitempty"`
+	Timeout int    `json:"timeout_ms,omitempty"`
+	Ms      int    `json:"ms,omitempty"`
+}
+
+type PipelineResult struct {
+	Step   int             `json:"step"`
+	Error  string          `json:"error,omitempty"`
+	Screen *ScreenResponse `json:"screen,omitempty"`
+}
+
+type PipelineResponse struct {
+	Results []PipelineResult `json:"results"`
 }
 
 type ListResponse struct {
@@ -316,7 +385,7 @@ func (h *Handler) Ping() *PingResponse {
 func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return nil, fmt.Errorf("session %q not found", req.ID)
+		return nil, awn.ErrSessionNotFound(req.ID)
 	}
 
 	scr := sess.Screen()
@@ -336,10 +405,36 @@ func (h *Handler) Screenshot(req ScreenshotRequest) (*ScreenResponse, error) {
 	return buildScreenResponse(scr, req.Format, elements, history, changes, baseHash), nil
 }
 
+func (h *Handler) Exec(req ExecRequest) (*ExecResponse, error) {
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return nil, awn.ErrSessionNotFound(req.ID)
+	}
+	if err := sess.SendKeys(req.Input + "\r"); err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(req.Timeout) * time.Millisecond
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	if req.WaitText != "" {
+		if err := sess.WaitForText(req.WaitText, timeout); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+			return nil, err
+		}
+	}
+	scr := sess.Screen()
+	screen := buildScreenResponse(scr, "", nil, nil, nil, "")
+	return &ExecResponse{Screen: screen}, nil
+}
+
 func (h *Handler) Input(req InputRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	return sess.SendKeys(req.Data)
 }
@@ -347,7 +442,7 @@ func (h *Handler) Input(req InputRequest) error {
 func (h *Handler) Resize(req ResizeRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	return sess.Resize(req.Rows, req.Cols)
 }
@@ -355,7 +450,7 @@ func (h *Handler) Resize(req ResizeRequest) error {
 func (h *Handler) MouseClick(req MouseRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	return sess.SendMouseClick(req.Row, req.Col, req.Button)
 }
@@ -363,15 +458,41 @@ func (h *Handler) MouseClick(req MouseRequest) error {
 func (h *Handler) MouseMove(req MouseRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	return sess.SendMouseMove(req.Row, req.Col)
+}
+
+func (h *Handler) Wait(req WaitRequest) error {
+	if req.Text == "" && !req.Stable && req.Gone == "" && req.Regex == "" {
+		return awn.ErrValidation("wait requires a condition: text, stable, gone, or regex")
+	}
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return awn.ErrSessionNotFound(req.ID)
+	}
+	timeout := time.Duration(req.Timeout) * time.Millisecond
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	switch {
+	case req.Text != "":
+		return sess.WaitForText(req.Text, timeout)
+	case req.Stable:
+		return sess.WaitForStable(500*time.Millisecond, timeout)
+	case req.Gone != "":
+		return sess.WaitForGone(req.Gone, timeout)
+	case req.Regex != "":
+		return sess.WaitForRegex(req.Regex, timeout)
+	default:
+		return fmt.Errorf("wait requires a condition: text, stable, gone, or regex")
+	}
 }
 
 func (h *Handler) WaitForText(req WaitTextRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	timeout := time.Duration(req.Timeout) * time.Millisecond
 	if timeout == 0 {
@@ -383,7 +504,7 @@ func (h *Handler) WaitForText(req WaitTextRequest) error {
 func (h *Handler) WaitForStable(req WaitStableRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	stable := time.Duration(req.Stable) * time.Millisecond
 	if stable == 0 {
@@ -399,7 +520,7 @@ func (h *Handler) WaitForStable(req WaitStableRequest) error {
 func (h *Handler) Detect(req IDRequest) (*DetectResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return nil, fmt.Errorf("session %q not found", req.ID)
+		return nil, awn.ErrSessionNotFound(req.ID)
 	}
 	elements := sess.FindAll(h.strategy)
 	return &DetectResponse{Elements: elements}, nil
@@ -412,9 +533,87 @@ func (h *Handler) Close(req IDRequest) error {
 func (h *Handler) Record(req RecordRequest) error {
 	sess := h.getSession(req.ID)
 	if sess == nil {
-		return fmt.Errorf("session %q not found", req.ID)
+		return awn.ErrSessionNotFound(req.ID)
 	}
 	return sess.RecordAsciicast(req.Path)
+}
+
+func (h *Handler) Pipeline(req PipelineRequest) (*PipelineResponse, error) {
+	if len(req.Steps) == 0 {
+		return nil, awn.ErrValidation("pipeline requires at least one step")
+	}
+	sess := h.getSession(req.ID)
+	if sess == nil {
+		return nil, awn.ErrSessionNotFound(req.ID)
+	}
+
+	var results []PipelineResult
+	for i, step := range req.Steps {
+		r := PipelineResult{Step: i}
+		timeout := time.Duration(step.Timeout) * time.Millisecond
+		if timeout == 0 {
+			timeout = 5 * time.Second
+		}
+
+		switch step.Type {
+		case "screenshot":
+			scr := sess.Screen()
+			r.Screen = buildScreenResponse(scr, "", nil, nil, nil, "")
+		case "type":
+			if err := sess.SendKeys(step.Text); err != nil {
+				r.Error = err.Error()
+			}
+		case "press":
+			seq, ok := awn.ResolveKey(step.Keys)
+			if !ok {
+				r.Error = fmt.Sprintf("unknown key: %s", step.Keys)
+			} else if err := sess.SendKeys(seq); err != nil {
+				r.Error = err.Error()
+			}
+		case "exec":
+			if err := sess.SendKeys(step.Input + "\r"); err != nil {
+				r.Error = err.Error()
+			} else {
+				if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+					r.Error = err.Error()
+				}
+				scr := sess.Screen()
+				r.Screen = buildScreenResponse(scr, "", nil, nil, nil, "")
+			}
+		case "wait":
+			switch {
+			case step.Text != "":
+				if err := sess.WaitForText(step.Text, timeout); err != nil {
+					r.Error = err.Error()
+				}
+			case step.Stable:
+				if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+					r.Error = err.Error()
+				}
+			case step.Gone != "":
+				if err := sess.WaitForGone(step.Gone, timeout); err != nil {
+					r.Error = err.Error()
+				}
+			case step.Regex != "":
+				if err := sess.WaitForRegex(step.Regex, timeout); err != nil {
+					r.Error = err.Error()
+				}
+			default:
+				r.Error = "wait step requires a condition"
+			}
+		case "sleep":
+			time.Sleep(time.Duration(step.Ms) * time.Millisecond)
+		default:
+			r.Error = fmt.Sprintf("unknown step type: %s", step.Type)
+		}
+
+		results = append(results, r)
+		if r.Error != "" && req.StopOnError {
+			break
+		}
+	}
+
+	return &PipelineResponse{Results: results}, nil
 }
 
 func (h *Handler) List() (*ListResponse, error) {

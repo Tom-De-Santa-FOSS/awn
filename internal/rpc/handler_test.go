@@ -15,6 +15,7 @@ import (
 	"github.com/tom/awn"
 )
 
+
 // stubStrategy is a no-op strategy for handler tests.
 type stubStrategy struct{}
 
@@ -486,6 +487,186 @@ func TestInferState_PercentPrompt_ReturnsWaitingForInput(t *testing.T) {
 	state := inferState(scr)
 	if state != "waiting_for_input" {
 		t.Fatalf("expected waiting_for_input, got %q", state)
+	}
+}
+
+func TestDispatch_Exec_RoutesCorrectly(t *testing.T) {
+	h := newTestHandler()
+	// Verify the exec route exists and parses params correctly.
+	// Uses nonexistent session to test routing without needing a real PTY.
+	_, err := h.Dispatch("exec", json.RawMessage(`{"id":"nonexistent","input":"ls"}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("exec route should exist")
+	}
+	if strings.Contains(err.Error(), "invalid params") {
+		t.Fatal("exec params should be valid")
+	}
+	// Should be a "session not found" error
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected session-not-found error, got: %v", err)
+	}
+}
+
+func TestDispatch_Exec_InvalidParams(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("exec", json.RawMessage(`"not json"`))
+	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+		t.Fatalf("expected invalid params error, got: %v", err)
+	}
+}
+
+func TestDispatch_Exec_NonexistentSession(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("exec", json.RawMessage(`{"id":"nonexistent","input":"ls"}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+}
+
+func TestDispatch_Wait_TextCondition(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("wait", json.RawMessage(`{"id":"nonexistent","text":"hello"}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("wait route should exist")
+	}
+}
+
+func TestDispatch_Wait_StableCondition(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("wait", json.RawMessage(`{"id":"nonexistent","stable":true}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("wait route should exist")
+	}
+}
+
+func TestDispatch_Wait_GoneCondition(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("wait", json.RawMessage(`{"id":"nonexistent","gone":"loading"}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("wait route should exist")
+	}
+}
+
+func TestDispatch_Wait_RegexCondition(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("wait", json.RawMessage(`{"id":"nonexistent","regex":"\\d+"}`))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("wait route should exist")
+	}
+}
+
+func TestDispatch_Wait_NoCondition(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("wait", json.RawMessage(`{"id":"nonexistent"}`))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "condition") {
+		t.Fatalf("expected 'condition' error, got: %v", err)
+	}
+}
+
+func TestDispatch_Pipeline_RoutesCorrectly(t *testing.T) {
+	h := newTestHandler()
+	params := `{"id":"nonexistent","steps":[{"type":"screenshot"}]}`
+	_, err := h.Dispatch("pipeline", json.RawMessage(params))
+	if err == nil {
+		t.Fatal("expected error for nonexistent session")
+	}
+	if strings.Contains(err.Error(), "method not found") {
+		t.Fatal("pipeline route should exist")
+	}
+}
+
+func TestDispatch_Pipeline_InvalidParams(t *testing.T) {
+	h := newTestHandler()
+	_, err := h.Dispatch("pipeline", json.RawMessage(`"bad"`))
+	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+		t.Fatalf("expected invalid params error, got: %v", err)
+	}
+}
+
+func TestDispatch_Pipeline_EmptySteps(t *testing.T) {
+	h := newTestHandler()
+	params := `{"id":"nonexistent","steps":[]}`
+	_, err := h.Dispatch("pipeline", json.RawMessage(params))
+	if err == nil {
+		t.Fatal("expected error for empty steps")
+	}
+}
+
+func TestDispatch_Pipeline_InvalidStepType(t *testing.T) {
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h := NewHandler(d, stubStrategy{})
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	params := fmt.Sprintf(`{"id":%q,"steps":[{"type":"bogus"}]}`, s.ID)
+	result, err := h.Dispatch("pipeline", json.RawMessage(params))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	resp, ok := result.(*PipelineResponse)
+	if !ok {
+		t.Fatalf("expected *PipelineResponse, got %T", result)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Error == "" {
+		t.Fatal("expected error for bogus step type")
+	}
+}
+
+func TestDispatch_Pipeline_ScreenshotStep(t *testing.T) {
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h := NewHandler(d, stubStrategy{})
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	_, _ = p.W.WriteString("hello")
+	if err := s.WaitForText("hello", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+
+	params := fmt.Sprintf(`{"id":%q,"steps":[{"type":"screenshot"}]}`, s.ID)
+	result, err := h.Dispatch("pipeline", json.RawMessage(params))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	resp, ok := result.(*PipelineResponse)
+	if !ok {
+		t.Fatalf("expected *PipelineResponse, got %T", result)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Error != "" {
+		t.Fatalf("unexpected error: %s", resp.Results[0].Error)
+	}
+	if resp.Results[0].Screen == nil {
+		t.Fatal("expected screen in result")
 	}
 }
 

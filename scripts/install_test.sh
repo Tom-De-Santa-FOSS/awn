@@ -190,4 +190,31 @@ echo "Test: awnd should be executable after do_install"
   assert_eq "awnd is executable" "1" "$([ -x "$TMPDIR/testbin2/awnd" ] && echo 1 || echo 0)"
 )
 
+# Test 13: prompt_skill skipped when AWN_SKIP_SKILL=1
+echo "Test: prompt_skill should return 1 when AWN_SKIP_SKILL=1"
+(
+  source "$SCRIPT_DIR/../install.sh" --source-only
+  rc=0
+  AWN_SKIP_SKILL=1 prompt_skill || rc=$?
+  assert_eq "returns 1 (skip)" "1" "$rc"
+)
+
+# Test 14: prompt_skill defaults to yes on non-interactive input
+echo "Test: prompt_skill should default to yes on empty input"
+(
+  source "$SCRIPT_DIR/../install.sh" --source-only
+  rc=0
+  echo "" | prompt_skill || rc=$?
+  assert_eq "returns 0 (install)" "0" "$rc"
+)
+
+# Test 15: prompt_skill returns 1 when user says no
+echo "Test: prompt_skill should return 1 when user says no"
+(
+  source "$SCRIPT_DIR/../install.sh" --source-only
+  rc=0
+  echo "n" | prompt_skill || rc=$?
+  assert_eq "returns 1 (skip)" "1" "$rc"
+)
+
 print_results

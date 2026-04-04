@@ -16,8 +16,6 @@ JSON-RPC 2.0 over WebSocket at `127.0.0.1:7600`.
 | `mouse_move` | `{id, row, col}` | `null` |
 | `exec` | `{id, input, wait_text?, timeout_ms?}` | `{screen}` |
 | `wait` | `{id, text?, stable?, gone?, regex?, timeout_ms?}` | `null` |
-| `wait_for_text` | `{id, text, timeout_ms?}` | `null` |
-| `wait_for_stable` | `{id, stable_ms?, timeout_ms?}` | `null` |
 | `pipeline` | `{id, steps, stop_on_error?}` | `{results}` |
 | `record` | `{id, path}` | `null` |
 | `close` | `{id}` | `null` |
@@ -68,6 +66,3 @@ Set `stop_on_error` to halt the pipeline on the first failing step.
 
 Set `AWN_TOKEN` on both daemon and client to enable Bearer token auth. All WebSocket requests must include the token in the `Authorization` header.
 
-## Subscriptions
-
-Use `subscribe` and `unsubscribe` over the WebSocket connection to receive real-time screen update notifications for a session.

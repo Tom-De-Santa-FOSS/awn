@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tom/awn"
 	"github.com/tom/awn/internal/rpc"
+	"go.uber.org/zap"
 )
 
 const maxConcurrentDispatches = 64
@@ -80,11 +80,12 @@ type Server struct {
 	token      string
 	maxConn    int32
 	activeConn atomic.Int32
+	log        *zap.Logger
 }
 
 // NewServer creates a WebSocket JSON-RPC server.
-func NewServer(d Dispatcher, addr string, token string) *Server {
-	return &Server{handler: d, addr: addr, token: token, maxConn: maxConnectionsFromEnv()}
+func NewServer(d Dispatcher, addr string, token string, logger *zap.Logger) *Server {
+	return &Server{handler: d, addr: addr, token: token, maxConn: maxConnectionsFromEnv(), log: logger}
 }
 
 // ListenAndServe starts the WebSocket server.
@@ -105,7 +106,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/", s.handleWS)
 	mux.HandleFunc("/health", s.handleHealth)
 
-	log.Printf("awn daemon listening on %s", s.addr)
+	s.log.Info("daemon listening", zap.String("addr", s.addr))
 	return http.ListenAndServe(s.addr, mux)
 }
 
@@ -139,14 +140,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("websocket upgrade: %v", err)
+		s.log.Error("websocket upgrade failed", zap.Error(err))
 		return
 	}
 	s.activeConn.Add(1)
 	defer s.activeConn.Add(-1)
 	defer conn.Close() //nolint:errcheck
 
-	log.Printf("client connected: %s", conn.RemoteAddr())
+	s.log.Debug("client connected", zap.String("remote", conn.RemoteAddr().String()))
 
 	var wmu sync.Mutex // protects conn.WriteMessage
 	var wg sync.WaitGroup
@@ -171,7 +172,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("read: %v", err)
+			s.log.Debug("read error", zap.Error(err))
 			return
 		}
 
@@ -210,7 +211,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			defer wmu.Unlock()
 
 			if err != nil {
-				log.Printf("dispatch %s: %v", req.Method, err)
+				s.log.Warn("dispatch error", zap.String("method", req.Method), zap.Error(err))
 				code := -32603
 				msg := "internal error"
 				var errData any
@@ -235,12 +236,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(resp)
 			if err != nil {
-				log.Printf("marshal response: %v", err)
+				s.log.Error("marshal response failed", zap.Error(err))
 				s.sendError(conn, req.ID, -32603, "internal error")
 				return
 			}
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-				log.Printf("write response: %v", err)
+				s.log.Error("write response failed", zap.Error(err))
 			}
 		}(req)
 		<-started
@@ -350,10 +351,10 @@ func (s *Server) sendErrorWithData(conn *websocket.Conn, id any, code int, msg s
 	}
 	raw, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf("marshal error response: %v", err)
+		s.log.Error("marshal error response failed", zap.Error(err))
 		return
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, raw); err != nil {
-		log.Printf("write error response: %v", err)
+		s.log.Error("write error response failed", zap.Error(err))
 	}
 }

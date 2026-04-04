@@ -9,6 +9,12 @@ import (
 	"time"
 
 	"github.com/tom/awn"
+	"go.uber.org/zap"
+)
+
+const (
+	defaultTimeout        = 5 * time.Second
+	defaultStableDuration = 500 * time.Millisecond
 )
 
 // NotifyFunc is a callback for sending push notifications to a client.
@@ -43,14 +49,20 @@ type Handler struct {
 	subMu         sync.Mutex
 	prevMu        sync.Mutex
 	previousLines map[string][]string
+	log           *zap.Logger
 }
 
 // NewHandler creates an RPC handler backed by a Driver and detection strategy.
-func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
+func NewHandler(d *awn.Driver, strategy awn.Strategy, logger ...*zap.Logger) *Handler {
+	l := zap.NewNop()
+	if len(logger) > 0 && logger[0] != nil {
+		l = logger[0]
+	}
 	h := &Handler{
 		driver:        d,
 		strategy:      strategy,
 		previousLines: make(map[string][]string),
+		log:           l.Named("rpc"),
 	}
 	h.routes = map[string]func(json.RawMessage) (any, error){
 		"ping": func(_ json.RawMessage) (any, error) {
@@ -111,20 +123,6 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy) *Handler {
 				return nil, errBadParams(err)
 			}
 			return nil, h.Wait(req)
-		},
-		"wait_for_text": func(p json.RawMessage) (any, error) {
-			var req WaitTextRequest
-			if err := json.Unmarshal(p, &req); err != nil {
-				return nil, errBadParams(err)
-			}
-			return nil, h.WaitForText(req)
-		},
-		"wait_for_stable": func(p json.RawMessage) (any, error) {
-			var req WaitStableRequest
-			if err := json.Unmarshal(p, &req); err != nil {
-				return nil, errBadParams(err)
-			}
-			return nil, h.WaitForStable(req)
 		},
 		"detect": func(p json.RawMessage) (any, error) {
 			var req IDRequest
@@ -225,17 +223,6 @@ type WaitRequest struct {
 	Timeout int    `json:"timeout_ms,omitempty"`
 }
 
-type WaitTextRequest struct {
-	ID      string `json:"id"`
-	Text    string `json:"text"`
-	Timeout int    `json:"timeout_ms,omitempty"`
-}
-
-type WaitStableRequest struct {
-	ID      string `json:"id"`
-	Stable  int    `json:"stable_ms,omitempty"`
-	Timeout int    `json:"timeout_ms,omitempty"`
-}
 
 type PipelineRequest struct {
 	ID          string         `json:"id"`
@@ -415,14 +402,14 @@ func (h *Handler) Exec(req ExecRequest) (*ExecResponse, error) {
 	}
 	timeout := time.Duration(req.Timeout) * time.Millisecond
 	if timeout == 0 {
-		timeout = 5 * time.Second
+		timeout = defaultTimeout
 	}
 	if req.WaitText != "" {
 		if err := sess.WaitForText(req.WaitText, timeout); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+		if err := sess.WaitForStable(defaultStableDuration, timeout); err != nil {
 			return nil, err
 		}
 	}
@@ -473,48 +460,19 @@ func (h *Handler) Wait(req WaitRequest) error {
 	}
 	timeout := time.Duration(req.Timeout) * time.Millisecond
 	if timeout == 0 {
-		timeout = 5 * time.Second
+		timeout = defaultTimeout
 	}
 	switch {
 	case req.Text != "":
 		return sess.WaitForText(req.Text, timeout)
 	case req.Stable:
-		return sess.WaitForStable(500*time.Millisecond, timeout)
+		return sess.WaitForStable(defaultStableDuration, timeout)
 	case req.Gone != "":
 		return sess.WaitForGone(req.Gone, timeout)
 	case req.Regex != "":
 		return sess.WaitForRegex(req.Regex, timeout)
-	default:
-		return fmt.Errorf("wait requires a condition: text, stable, gone, or regex")
 	}
-}
-
-func (h *Handler) WaitForText(req WaitTextRequest) error {
-	sess := h.getSession(req.ID)
-	if sess == nil {
-		return awn.ErrSessionNotFound(req.ID)
-	}
-	timeout := time.Duration(req.Timeout) * time.Millisecond
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	return sess.WaitForText(req.Text, timeout)
-}
-
-func (h *Handler) WaitForStable(req WaitStableRequest) error {
-	sess := h.getSession(req.ID)
-	if sess == nil {
-		return awn.ErrSessionNotFound(req.ID)
-	}
-	stable := time.Duration(req.Stable) * time.Millisecond
-	if stable == 0 {
-		stable = 500 * time.Millisecond
-	}
-	timeout := time.Duration(req.Timeout) * time.Millisecond
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	return sess.WaitForStable(stable, timeout)
+	return nil
 }
 
 func (h *Handler) Detect(req IDRequest) (*DetectResponse, error) {
@@ -552,7 +510,7 @@ func (h *Handler) Pipeline(req PipelineRequest) (*PipelineResponse, error) {
 		r := PipelineResult{Step: i}
 		timeout := time.Duration(step.Timeout) * time.Millisecond
 		if timeout == 0 {
-			timeout = 5 * time.Second
+			timeout = defaultTimeout
 		}
 
 		switch step.Type {
@@ -574,7 +532,7 @@ func (h *Handler) Pipeline(req PipelineRequest) (*PipelineResponse, error) {
 			if err := sess.SendKeys(step.Input + "\r"); err != nil {
 				r.Error = err.Error()
 			} else {
-				if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+				if err := sess.WaitForStable(defaultStableDuration, timeout); err != nil {
 					r.Error = err.Error()
 				}
 				scr := sess.Screen()
@@ -587,7 +545,7 @@ func (h *Handler) Pipeline(req PipelineRequest) (*PipelineResponse, error) {
 					r.Error = err.Error()
 				}
 			case step.Stable:
-				if err := sess.WaitForStable(500*time.Millisecond, timeout); err != nil {
+				if err := sess.WaitForStable(defaultStableDuration, timeout); err != nil {
 					r.Error = err.Error()
 				}
 			case step.Gone != "":
@@ -747,10 +705,13 @@ func errBadParams(err error) *RPCError {
 func (h *Handler) Dispatch(method string, params json.RawMessage) (any, error) {
 	fn, ok := h.routes[method]
 	if !ok {
+		h.log.Warn("method not found", zap.String("method", method))
 		return nil, &RPCError{Code: -32601, Err: fmt.Errorf("method not found: %s", method)}
 	}
+	h.log.Debug("dispatch", zap.String("method", method))
 	result, err := fn(params)
 	if err != nil {
+		h.log.Warn("dispatch error", zap.String("method", method), zap.Error(err))
 		return nil, err
 	}
 	return result, nil

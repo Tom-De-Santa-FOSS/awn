@@ -326,12 +326,6 @@ func run(args []string, caller rpcCaller) (string, error) {
 			return "", err
 		}
 		return result + "\n", nil
-	case "watch":
-		if len(args) < 2 {
-			return "", fmt.Errorf("usage: awn watch <session-id>")
-		}
-		watch(addr, args[1])
-		return "", nil
 	case "pipeline":
 		if len(args) < 3 {
 			return "", fmt.Errorf("usage: awn pipeline <session-id> '<steps-json>'")
@@ -358,7 +352,7 @@ func run(args []string, caller rpcCaller) (string, error) {
 		}
 		return runDaemon(args[1:], addr, caller)
 	default:
-		return "", fmt.Errorf("unknown command: %s\n\nCommands:\n  create, screenshot, input, press, type, exec, resize,\n  mouse-click, mouse-move, wait, detect, close,\n  list, record, ping, watch, daemon", cmd)
+		return "", fmt.Errorf("unknown command: %s\n\nCommands:\n  create, screenshot, input, press, type, exec, resize,\n  mouse-click, mouse-move, wait, detect, close,\n  list, record, ping, daemon", cmd)
 	}
 }
 

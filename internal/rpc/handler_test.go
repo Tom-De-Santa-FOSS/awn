@@ -107,8 +107,6 @@ func TestDispatch_MethodNotFound_ForNonexistentSession(t *testing.T) {
 		{name: "screenshot", method: "screenshot", params: `{"id":"nonexistent"}`},
 		{name: "detect", method: "detect", params: `{"id":"nonexistent"}`},
 		{name: "input", method: "input", params: `{"id":"nonexistent","data":"x"}`},
-		{name: "wait_for_text", method: "wait_for_text", params: `{"id":"nonexistent","text":"x"}`},
-		{name: "wait_for_stable", method: "wait_for_stable", params: `{"id":"nonexistent"}`},
 		{name: "close", method: "close", params: `{"id":"nonexistent"}`},
 		{name: "resize", method: "resize", params: `{"id":"nonexistent","rows":40,"cols":100}`, rejectMethodErr: true, rejectParamsErr: true},
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
+	"go.uber.org/zap"
 )
 
 const (
@@ -27,6 +28,7 @@ type Driver struct {
 	mu             sync.RWMutex
 	pty            PTYStarter
 	persistenceDir string
+	log            *zap.Logger
 }
 
 // NewDriver creates a new Driver.
@@ -34,6 +36,7 @@ func NewDriver(opts ...DriverOption) *Driver {
 	d := &Driver{
 		sessions: make(map[string]*Session),
 		pty:      realPTY{},
+		log:      zap.NewNop(),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -80,6 +83,7 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 	}
 
 	id := shortID()
+	sessLog := d.log.With(zap.String("session", id))
 	sess := &Session{
 		ID:        id,
 		cmd:       cmd,
@@ -91,6 +95,7 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 		history:   newHistoryBuffer(cfg.Scrollback),
 		startedAt: time.Now(),
 		updatedAt: time.Now(),
+		log:       sessLog,
 	}
 	if d.persistenceDir != "" {
 		sess.persist = func() { d.persistSession(sess) }
@@ -104,6 +109,12 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 	go sess.readLoop()
 	d.persistSession(sess)
 
+	d.log.Info("session created",
+		zap.String("id", id),
+		zap.String("command", cfg.Command),
+		zap.Int("rows", cfg.Rows),
+		zap.Int("cols", cfg.Cols),
+	)
 	return sess, nil
 }
 
@@ -177,6 +188,7 @@ func (d *Driver) Close(id string) error {
 	fullID, ok := d.resolveID(id)
 	if !ok {
 		d.mu.Unlock()
+		d.log.Warn("close: session not found", zap.String("id", id))
 		return fmt.Errorf("session %q not found", id)
 	}
 	sess := d.sessions[fullID]
@@ -186,6 +198,7 @@ func (d *Driver) Close(id string) error {
 
 	err := sess.Close()
 	d.deletePersistedSession(fullID)
+	d.log.Info("session closed", zap.String("id", fullID))
 	return err
 }
 
@@ -202,6 +215,7 @@ func (d *Driver) CloseAll() {
 	for _, sess := range sessions {
 		_ = sess.Close()
 	}
+	d.log.Info("all sessions closed", zap.Int("count", len(sessions)))
 }
 
 // Config holds session creation parameters.
@@ -262,9 +276,11 @@ func (d *Driver) loadPersistedSessions() {
 		if sess == nil {
 			continue
 		}
+		sess.log = d.log.With(zap.String("session", sess.ID))
 		if d.persistenceDir != "" {
 			sess.persist = func() { d.persistSession(sess) }
 		}
 		d.sessions[sess.ID] = sess
+		d.log.Info("session restored", zap.String("id", sess.ID))
 	}
 }

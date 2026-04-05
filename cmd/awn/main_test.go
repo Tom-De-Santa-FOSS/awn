@@ -972,3 +972,73 @@ func TestRun_ExecCommand_UsesCurrentSession(t *testing.T) {
 		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
 	}
 }
+
+func TestRun_CreateWithEnvAndDir(t *testing.T) {
+	var gotParams map[string]any
+	_, err := run([]string{"create", "bash", "--env", "FOO=bar", "--env", "BAZ=qux", "--dir", "/tmp"}, func(_ string, method string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams) //nolint:errcheck
+		return `{"id":"sess-1"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	env, ok := gotParams["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("env = %T, want map", gotParams["env"])
+	}
+	if env["FOO"] != "bar" {
+		t.Fatalf("env[FOO] = %v", env["FOO"])
+	}
+	if env["BAZ"] != "qux" {
+		t.Fatalf("env[BAZ] = %v", env["BAZ"])
+	}
+	if gotParams["dir"] != "/tmp" {
+		t.Fatalf("dir = %v", gotParams["dir"])
+	}
+}
+
+func TestRun_CreateWithRecord(t *testing.T) {
+	var gotParams map[string]any
+	_, err := run([]string{"create", "bash", "--record", "--record-path", "/tmp/demo.cast"}, func(_ string, method string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams) //nolint:errcheck
+		return `{"id":"sess-1"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["record"] != true {
+		t.Fatalf("record = %v", gotParams["record"])
+	}
+	if gotParams["record_path"] != "/tmp/demo.cast" {
+		t.Fatalf("record_path = %v", gotParams["record_path"])
+	}
+}
+
+func TestRun_PressWithRepeat(t *testing.T) {
+	var gotParams map[string]any
+	_, err := run([]string{"press", "sess-1", "Down", "--repeat", "5"}, func(_ string, method string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams) //nolint:errcheck
+		return "null", nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["repeat"] != float64(5) {
+		t.Fatalf("repeat = %v, want 5", gotParams["repeat"])
+	}
+}
+
+func TestRun_CreateWithEnvBadFormat(t *testing.T) {
+	_, err := run([]string{"create", "bash", "--env", "NOEQUALS"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"id":"x"}`, nil
+	})
+	if err == nil {
+		t.Fatal("expected error for bad --env format")
+	}
+	if !strings.Contains(err.Error(), "KEY=VALUE") {
+		t.Fatalf("error = %q, want mention of KEY=VALUE", err)
+	}
+}

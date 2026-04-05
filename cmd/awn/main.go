@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +14,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tom/awn"
 )
+
+var version = "dev"
+var commit = "none"
 
 type detectRenderElement struct {
 	Type        string   `json:"type"`
@@ -110,10 +115,16 @@ func resolveSessionID(args []string, stateDir string) (string, []string, error) 
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-V" {
+			fmt.Printf("awn v%s (%s)\n", version, commit)
+			os.Exit(0)
+		}
+	}
 	opts := &runOpts{caller: callRPC, stateDir: defaultStateDir()}
 	stdout, err := runWithOpts(os.Args[1:], opts)
 	if err != nil {
-		fatal(err.Error())
+		fatal(err)
 	}
 	if stdout != "" {
 		fmt.Print(stdout)
@@ -132,9 +143,8 @@ func runWithOpts(args []string, opts *runOpts) (string, error) {
 	}
 
 	addr := os.Getenv("AWN_ADDR")
-	if addr == "" {
-		addr = "ws://localhost:7600"
-	}
+	// If AWN_ADDR is not set, we'll use Unix socket (addr stays empty as signal).
+	// AWN_SOCKET or default ~/.awn/daemon.sock is resolved in callRPC.
 
 	// Parse global flags
 	jsonOutput := false
@@ -169,11 +179,59 @@ func runWithOpts(args []string, opts *runOpts) (string, error) {
 	switch cmd {
 	case "create":
 		if len(args) < 2 {
-			return "", fmt.Errorf("usage: awn create <command> [args...]")
+			return "", fmt.Errorf("usage: awn create <command> [args...] [--env KEY=VALUE] [--dir /path] [--record] [--record-path <path>]")
 		}
 		params := map[string]any{"command": args[1], "rows": 24, "cols": 80}
-		if len(args) > 2 {
-			params["args"] = args[2:]
+		var cmdArgs []string
+		envVars := map[string]string{}
+		record := false
+		recordPath := ""
+		dir := ""
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--env", "-e":
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --env")
+				}
+				parts := strings.SplitN(args[i], "=", 2)
+				if len(parts) != 2 {
+					return "", fmt.Errorf("invalid --env format, expected KEY=VALUE: %s", args[i])
+				}
+				envVars[parts[0]] = parts[1]
+			case "--dir":
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --dir")
+				}
+				dir = args[i]
+			case "--record":
+				record = true
+			case "--record-path":
+				i++
+				if i >= len(args) {
+					return "", fmt.Errorf("missing value for --record-path")
+				}
+				recordPath = args[i]
+				record = true
+			default:
+				cmdArgs = append(cmdArgs, args[i])
+			}
+		}
+		if len(cmdArgs) > 0 {
+			params["args"] = cmdArgs
+		}
+		if len(envVars) > 0 {
+			params["env"] = envVars
+		}
+		if dir != "" {
+			params["dir"] = dir
+		}
+		if record {
+			params["record"] = true
+		}
+		if recordPath != "" {
+			params["record_path"] = recordPath
 		}
 		result, err := caller(addr, "create", params)
 		if err != nil {
@@ -236,17 +294,37 @@ func runWithOpts(args []string, opts *runOpts) (string, error) {
 	case "press":
 		sessID, sessArgs, err := resolveSessionID(args[1:], opts.stateDir)
 		if err != nil {
-			return "", fmt.Errorf("usage: awn press [session-id] <key> [key...]\n%w", err)
+			return "", fmt.Errorf("usage: awn press [session-id] <key> [key...] [--repeat N]\n%w", err)
 		}
 		if len(sessArgs) < 1 {
-			return "", fmt.Errorf("usage: awn press [session-id] <key> [key...]")
+			return "", fmt.Errorf("usage: awn press [session-id] <key> [key...] [--repeat N]")
 		}
-		for _, key := range sessArgs {
+		repeat := 1
+		var keys []string
+		for i := 0; i < len(sessArgs); i++ {
+			switch sessArgs[i] {
+			case "--repeat", "-n":
+				i++
+				if i >= len(sessArgs) {
+					return "", fmt.Errorf("missing value for --repeat")
+				}
+				repeat, err = strconv.Atoi(sessArgs[i])
+				if err != nil || repeat < 1 {
+					return "", fmt.Errorf("invalid --repeat value: %s", sessArgs[i])
+				}
+			default:
+				keys = append(keys, sessArgs[i])
+			}
+		}
+		if len(keys) == 0 {
+			return "", fmt.Errorf("usage: awn press [session-id] <key> [key...] [--repeat N]")
+		}
+		for _, key := range keys {
 			seq, ok := awn.ResolveKey(key)
 			if !ok {
-				return "", fmt.Errorf("unknown key: %s", key)
+				return "", awn.ErrInvalidKey(key)
 			}
-			_, err := caller(addr, "input", map[string]any{"id": sessID, "data": seq})
+			_, err := caller(addr, "input", map[string]any{"id": sessID, "data": seq, "repeat": repeat})
 			if err != nil {
 				return "", err
 			}
@@ -542,13 +620,39 @@ func runWithOpts(args []string, opts *runOpts) (string, error) {
 	}
 }
 
+// resolveSocketPath returns the Unix socket path from env or default.
+func resolveSocketPath() string {
+	if s := os.Getenv("AWN_SOCKET"); s != "" {
+		return s
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".awn", "daemon.sock")
+}
+
 func callRPC(addr, method string, params any) (string, error) {
 	header := http.Header{}
 	if token := os.Getenv("AWN_TOKEN"); token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(addr, header)
+	var conn *websocket.Conn
+	var err error
+	if addr != "" {
+		// TCP mode: AWN_ADDR was explicitly set.
+		conn, _, err = websocket.DefaultDialer.Dial(addr, header)
+	} else {
+		// Unix socket mode (default).
+		sock := resolveSocketPath()
+		dialer := websocket.Dialer{
+			NetDial: func(network, a string) (net.Conn, error) {
+				return net.Dial("unix", sock)
+			},
+		}
+		conn, _, err = dialer.Dial("ws://localhost/", header)
+	}
 	if err != nil {
 		return "", fmt.Errorf("connect to daemon: %w", err)
 	}
@@ -579,8 +683,9 @@ func callRPC(addr, method string, params any) (string, error) {
 	var resp struct {
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
+			Code    int             `json:"code"`
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data,omitempty"`
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(msg, &resp); err != nil {
@@ -588,6 +693,13 @@ func callRPC(addr, method string, params any) (string, error) {
 	}
 
 	if resp.Error != nil {
+		// Try to parse structured error data.
+		if resp.Error.Data != nil {
+			var ae awn.AwnError
+			if json.Unmarshal(resp.Error.Data, &ae) == nil && ae.Code != "" {
+				return "", &ae
+			}
+		}
 		return "", fmt.Errorf("%s", resp.Error.Message)
 	}
 
@@ -671,7 +783,15 @@ func displayRole(el detectRenderElement) string {
 	return el.Type
 }
 
-func fatal(msg string) {
-	fmt.Fprintln(os.Stderr, "error:", msg)
+func fatal(err error) {
+	var ae *awn.AwnError
+	if errors.As(err, &ae) {
+		fmt.Fprintln(os.Stderr, "error:", ae.Message)
+		if ae.Suggestion != "" {
+			fmt.Fprintln(os.Stderr, "hint:", ae.Suggestion)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "error:", err)
+	}
 	os.Exit(1)
 }

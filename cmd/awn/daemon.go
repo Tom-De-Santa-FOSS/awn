@@ -34,12 +34,31 @@ func pidFilePath() string {
 	return filepath.Join(dir, "awnd.pid")
 }
 
+// resolveSocketForDaemon returns the Unix socket path used by the daemon.
+func resolveSocketForDaemon() string {
+	if s := os.Getenv("AWN_SOCKET"); s != "" {
+		return s
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".awn", "daemon.sock")
+}
+
 func daemonStart(addr string) (string, error) {
+	useTCP := addr != "" // addr is only set when AWN_ADDR is explicitly configured
+	sock := resolveSocketForDaemon()
+
 	// Check if already running
-	host := strings.TrimPrefix(addr, "ws://")
-	if conn, err := net.DialTimeout("tcp", host, 500*time.Millisecond); err == nil {
-		conn.Close()
-		return "daemon already running\n", nil
+	if useTCP {
+		host := strings.TrimPrefix(addr, "ws://")
+		if conn, err := net.DialTimeout("tcp", host, 500*time.Millisecond); err == nil {
+			conn.Close()
+			return "daemon already running\n", nil
+		}
+	} else {
+		if conn, err := net.DialTimeout("unix", sock, 500*time.Millisecond); err == nil {
+			conn.Close()
+			return "daemon already running\n", nil
+		}
 	}
 
 	// Find awnd binary
@@ -49,6 +68,9 @@ func daemonStart(addr string) (string, error) {
 	}
 
 	cmd := exec.Command(awndPath)
+	if useTCP {
+		cmd.Args = append(cmd.Args, "--tcp", "--addr", strings.TrimPrefix(addr, "ws://"))
+	}
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
@@ -67,9 +89,17 @@ func daemonStart(addr string) (string, error) {
 	// Poll for readiness
 	for range 50 {
 		time.Sleep(100 * time.Millisecond)
-		if conn, err := net.DialTimeout("tcp", host, 200*time.Millisecond); err == nil {
-			conn.Close()
-			return fmt.Sprintf("daemon started (pid %d)\n", cmd.Process.Pid), nil
+		if useTCP {
+			host := strings.TrimPrefix(addr, "ws://")
+			if conn, err := net.DialTimeout("tcp", host, 200*time.Millisecond); err == nil {
+				conn.Close()
+				return fmt.Sprintf("daemon started (pid %d)\n", cmd.Process.Pid), nil
+			}
+		} else {
+			if conn, err := net.DialTimeout("unix", sock, 200*time.Millisecond); err == nil {
+				conn.Close()
+				return fmt.Sprintf("daemon started (pid %d, socket %s)\n", cmd.Process.Pid, sock), nil
+			}
 		}
 	}
 
@@ -108,5 +138,8 @@ func daemonStatus(addr string, caller rpcCaller) (string, error) {
 	if err != nil {
 		return "daemon not running\n", nil
 	}
-	return fmt.Sprintf("daemon running: %s\n", result), nil
+	if addr != "" {
+		return fmt.Sprintf("daemon running (tcp %s): %s\n", addr, result), nil
+	}
+	return fmt.Sprintf("daemon running (unix %s): %s\n", resolveSocketForDaemon(), result), nil
 }

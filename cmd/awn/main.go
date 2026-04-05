@@ -12,6 +12,20 @@ import (
 	"github.com/tom/awn"
 )
 
+type detectRenderElement struct {
+	Type        string   `json:"type"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Bounds      awn.Rect `json:"bounds"`
+	Focused     bool     `json:"focused"`
+	Role        string   `json:"role,omitempty"`
+	Ref         string   `json:"ref,omitempty"`
+}
+
+type detectRenderResponse struct {
+	Elements []detectRenderElement `json:"elements"`
+}
+
 type rpcCaller func(addr, method string, params any) (string, error)
 
 func main() {
@@ -300,11 +314,26 @@ func run(args []string, caller rpcCaller) (string, error) {
 		if len(args) < 2 {
 			return "", fmt.Errorf("usage: awn detect <session-id>")
 		}
-		result, err := caller(addr, "detect", map[string]any{"id": args[1]})
+		params := map[string]any{"id": args[1]}
+		printJSON := jsonOutput
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--structured":
+				params["format"] = "structured"
+			case "--json":
+				printJSON = true
+			default:
+				return "", fmt.Errorf("unknown detect flag: %s", args[i])
+			}
+		}
+		result, err := caller(addr, "detect", params)
 		if err != nil {
 			return "", err
 		}
-		return result + "\n", nil
+		if printJSON || params["format"] != "structured" {
+			return result + "\n", nil
+		}
+		return renderStructuredDetect(result)
 	case "list":
 		result, err := caller(addr, "list", nil)
 		if err != nil {
@@ -406,6 +435,39 @@ func callRPC(addr, method string, params any) (string, error) {
 	}
 
 	return string(resp.Result), nil
+}
+
+func renderStructuredDetect(raw string) (string, error) {
+	var resp detectRenderResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return "", fmt.Errorf("parse detect: %w", err)
+	}
+	if len(resp.Elements) == 0 {
+		return "(no elements detected)\n", nil
+	}
+	lines := make([]string, 0, len(resp.Elements))
+	for _, el := range resp.Elements {
+		handle := el.Ref
+		if handle == "" {
+			handle = el.Type
+		}
+		line := fmt.Sprintf("@%s [%s] %q @%d,%d %dx%d", handle, displayRole(el), el.Label, el.Bounds.Row, el.Bounds.Col, el.Bounds.Width, el.Bounds.Height)
+		if el.Focused {
+			line += " focused"
+		}
+		if el.Description != "" {
+			line += " - " + el.Description
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
+func displayRole(el detectRenderElement) string {
+	if el.Role != "" {
+		return el.Role
+	}
+	return el.Type
 }
 
 func fatal(msg string) {

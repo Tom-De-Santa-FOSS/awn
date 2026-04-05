@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -162,10 +164,14 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy, logger ...*zap.Logger) *Ha
 // --- Request/Response types ---
 
 type CreateRequest struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-	Rows    int      `json:"rows,omitempty"`
-	Cols    int      `json:"cols,omitempty"`
+	Command    string            `json:"command"`
+	Args       []string          `json:"args,omitempty"`
+	Rows       int               `json:"rows,omitempty"`
+	Cols       int               `json:"cols,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Dir        string            `json:"dir,omitempty"`
+	Record     bool              `json:"record,omitempty"`
+	RecordPath string            `json:"record_path,omitempty"`
 }
 
 type CreateResponse struct {
@@ -186,8 +192,9 @@ type DetectRequest struct {
 }
 
 type InputRequest struct {
-	ID   string `json:"id"`
-	Data string `json:"data"`
+	ID     string `json:"id"`
+	Data   string `json:"data"`
+	Repeat int    `json:"repeat,omitempty"`
 }
 
 type ResizeRequest struct {
@@ -365,9 +372,23 @@ func (h *Handler) Create(req CreateRequest) (*CreateResponse, error) {
 		Args:    req.Args,
 		Rows:    req.Rows,
 		Cols:    req.Cols,
+		Env:     req.Env,
+		Dir:     req.Dir,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if req.Record {
+		path := req.RecordPath
+		if path == "" {
+			home, _ := os.UserHomeDir()
+			dir := filepath.Join(home, ".awn", "recordings")
+			os.MkdirAll(dir, 0o755) //nolint:errcheck
+			path = filepath.Join(dir, s.ID+".cast")
+		}
+		if err := s.RecordAsciicast(path); err != nil {
+			h.log.Warn("record failed", zap.String("session", s.ID), zap.Error(err))
+		}
 	}
 	return &CreateResponse{ID: s.ID}, nil
 }
@@ -430,7 +451,16 @@ func (h *Handler) Input(req InputRequest) error {
 	if sess == nil {
 		return awn.ErrSessionNotFound(req.ID)
 	}
-	return sess.SendKeys(req.Data)
+	n := req.Repeat
+	if n <= 0 {
+		n = 1
+	}
+	for range n {
+		if err := sess.SendKeys(req.Data); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) Resize(req ResizeRequest) error {

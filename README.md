@@ -8,53 +8,142 @@ TUI automation for AI agents. Manage headless terminal sessions — screenshot, 
 
 <img src="https://skillicons.dev/icons?i=go" alt="Go" />
 
-## Highlights
-
-- Headless terminal sessions with full PTY emulation
-- AI-friendly element detection via [awtree](https://github.com/Tom-De-Santa-FOSS/awtree)
-- Agent-friendly structured detect output with refs, roles, descriptions, and tree data
-- Current session tracking — create once, omit the ID from subsequent commands
-- Human-friendly command aliases (`open`, `show`, `inspect`) and readable output
-- JSON-RPC 2.0 over WebSocket — use from any language
-- MCP server included for direct LLM tool integration
-- Session persistence and restore across daemon restarts
-- Named key input (Enter, Ctrl+C, arrows, function keys)
-- Multi-step pipelines for batching operations
-- Exec-and-wait for scripting shell interactions
-- Flexible wait conditions: text match, regex, gone, stable screen
-
 ## Install
+
+### Homebrew (macOS & Linux)
+
+```bash
+brew install Tom-De-Santa-FOSS/tap/awn
+```
+
+### Go
+
+```bash
+go install github.com/tom/awn/cmd/awn@latest
+go install github.com/tom/awn/cmd/awnd@latest
+go install github.com/tom/awn/cmd/awn-mcp@latest
+```
+
+### Shell script
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Tom-De-Santa-FOSS/awn/master/install.sh | bash
 ```
+
+### Binary releases
+
+Download from [GitHub Releases](https://github.com/Tom-De-Santa-FOSS/awn/releases).
 
 ## Quickstart
 
 ```bash
 awn daemon start                # start the daemon
 awn create yazi                 # launch a session (becomes current)
-awn show                        # capture the screen (uses current session)
+awn show                        # capture the screen
 awn inspect                     # human-readable UI elements
 awn close                       # terminate the session
 ```
 
-Session IDs are tracked automatically — `create` sets the current session and subsequent commands use it. Pass `--session <id>` or a positional ID to target a specific session.
+Session IDs are tracked automatically — `create` sets the current session and subsequent commands use it. Pass `--session <id>` or `-s <id>` to target a specific session.
 
-## Usage
+## Architecture
 
-### Current Session
-
-`awn create` automatically sets the current session. All commands that take a session ID will use it by default:
-
-```bash
-awn create bash                        # sets current session
-awn screenshot                         # uses current session
-awn type "hello"                       # uses current session
-awn close                              # closes and clears current session
+```
+Agent → CLI / SDK → JSON-RPC 2.0 (Unix socket or WebSocket) → Daemon → PTY + VT100 + awtree
 ```
 
-Override with `--session <id>` or `-s <id>` to target a different session. The current session is stored in `~/.awn/current`.
+The daemon manages multiple terminal sessions, each with its own pseudo-terminal, VT100 emulator, and element detector ([awtree](https://github.com/Tom-De-Santa-FOSS/awtree)). By default, communication uses a Unix domain socket at `~/.awn/daemon.sock`. TCP mode is available with `--tcp` for remote automation.
+
+## CLI Reference
+
+### Daemon
+
+```bash
+awn daemon start                       # start (Unix socket, default)
+awn daemon stop                        # stop
+awn daemon status                      # check status, shows transport type
+```
+
+### Sessions
+
+```bash
+awn create <cmd> [args...] [flags]     # start session (sets current)
+    --env KEY=VALUE                    # set env var (repeatable)
+    --dir /path                        # working directory
+    --record                           # start recording immediately
+    --record-path <path>               # custom recording path
+awn list                               # show active sessions (* = current)
+awn close [id]                         # terminate session
+```
+
+### Screen Capture
+
+```bash
+awn screenshot [id]                    # text lines (default)
+awn screenshot [id] --json             # full JSON response
+awn screenshot [id] --full             # lines + elements + state
+awn screenshot [id] --structured       # elements + state (no lines)
+awn screenshot [id] --diff             # changed rows since last capture
+awn screenshot [id] --scrollback N     # include scrollback history
+```
+
+All responses include a `hash` field (SHA-256) for change detection.
+
+| Format | Lines | Elements | State | Changes |
+|--------|-------|----------|-------|---------|
+| *(default)* | yes | no | no | no |
+| `--full` | yes | yes | yes | no |
+| `--structured` | no | yes | yes | no |
+| `--diff` | no | no | yes | yes |
+
+### Input
+
+```bash
+awn type [id] "text"                   # send text (no Enter)
+awn press [id] <key> [--repeat N]      # send named key(s)
+awn input [id] "raw"                   # send raw bytes/escape sequences
+awn mouse-click [id] <row> <col> [btn] # click at position
+awn mouse-move [id] <row> <col>        # move cursor
+```
+
+### Detection
+
+```bash
+awn detect [id]                        # human-readable (default)
+awn detect [id] --json                 # full structured JSON
+awn detect [id] --verbose              # detailed with refs and bounds
+```
+
+### Waiting
+
+```bash
+awn wait [id] --text "Status"          # until text appears
+awn wait [id] --gone "Loading"         # until text disappears
+awn wait [id] --regex "v\d+\.\d+"     # until regex matches
+awn wait [id] --stable                 # until screen stops changing
+awn wait [id] --timeout 10000          # timeout in ms (default 5000)
+```
+
+### Automation
+
+```bash
+awn exec [id] "ls -la"                 # type + Enter + wait stable
+awn exec [id] "make" --wait-text "done"
+awn exec [id] "cargo build" --timeout 30000
+
+awn pipeline [id] '[
+  {"type": "exec", "input": "git status"},
+  {"type": "screenshot"},
+  {"type": "press", "keys": "q"}
+]' --stop-on-error
+```
+
+### Recording
+
+```bash
+awn create bash --record               # record from first byte
+awn record [id] session.cast           # start recording post-hoc
+```
 
 ### Command Aliases
 
@@ -64,122 +153,63 @@ Override with `--session <id>` or `-s <id>` to target a different session. The c
 | `show` | `screenshot` |
 | `inspect` | `detect` |
 
-### Sessions
-
-```bash
-awn create <command> [args...]         # start a session (sets current)
-awn list                               # show active sessions (* marks current)
-awn close [id]                         # terminate session
-awn ping                               # daemon health check
-awn daemon start                       # start the daemon in background
-awn daemon stop                        # stop the daemon
-awn daemon status                      # check daemon status
-```
-
-### Screen Capture
-
-```bash
-awn screenshot [id]                    # render screen as text
-awn screenshot [id] --json             # full JSON response
-awn screenshot [id] --full             # screen + detected elements
-awn screenshot [id] --structured       # semantic state + detected elements (JSON)
-awn screenshot [id] --diff             # changed rows since last screenshot
-awn screenshot [id] --scrollback 100   # include scrollback history
-```
-
-### Input
-
-```bash
-awn type [id] "hello world"            # send literal text
-awn press [id] Enter                   # send a named key
-awn press [id] Ctrl+C                  # send key combo
-awn input [id] "raw data"              # send raw bytes
-awn mouse-click [id] 10 12             # click at row col
-awn mouse-move [id] 10 12              # move cursor to row col
-```
-
-### Waiting
-
-```bash
-awn wait [id] --text "Status"          # block until text appears
-awn wait [id] --gone "Loading"         # block until text disappears
-awn wait [id] --regex "v\d+\.\d+"     # block until regex matches
-awn wait [id] --stable                 # block until screen stops changing
-awn wait [id] --timeout 10000          # set timeout in ms (default 5000)
-```
-
-### Automation
-
-```bash
-awn exec [id] "ls -la"                         # run command, wait for output
-awn exec [id] "make" --wait-text "done"        # wait for specific text
-awn exec [id] "cargo build" --timeout 30000    # custom timeout
-
-awn pipeline [id] '[                           # batch multiple steps
-  {"type": "type", "text": "ls\r"},
-  {"type": "wait", "text": "$"},
-  {"type": "screenshot"}
-]'
-```
-
-### Other
-
-```bash
-awn detect [id]                        # human-readable element list (default)
-awn detect [id] --json                 # full structured JSON for agents
-awn detect [id] --verbose              # verbose human-readable with refs and bounds
-awn resize [id] 40 120                 # resize session rows/cols
-awn record [id] session.cast           # write asciicast v2 recording
-```
-
-Detect defaults to human-readable output showing roles and labels. Use `--json` for the full structured payload with refs, tree data, and viewport information. Use `--verbose` for a detailed human-readable view including refs, bounds, and descriptions.
-
 ## Go SDK
 
-Embed the driver directly:
-
 ```go
-import (
-    "time"
-    "github.com/tom/awn"
-    "github.com/tom/awn/awtreestrategy"
-)
+import "github.com/tom/awn/sdk"
 
-d := awn.NewDriver()
-s, _ := d.Session("yazi")
-s.WaitForText("Status", 5*time.Second)
-elements := s.FindAll(awtreestrategy.New())
-s.SendKeys("q")
-d.Close(s.ID)
+c, err := sdk.Connect()                                    // Unix socket (default)
+c, err := sdk.Connect(sdk.WithAddr("ws://..."), sdk.WithToken("...")) // TCP
+
+s, err := c.Create(ctx, "bash")
+scr, err := c.Exec(ctx, s.ID, "ls -la", sdk.WaitStable())
+fmt.Println(scr.Lines)
+
+result, err := c.Detect(ctx, s.ID)
+for _, el := range result.Elements {
+    fmt.Println(el.Role, el.Label)
+}
+
+c.Close(ctx, s.ID)
 ```
 
-Or connect to the daemon over WebSocket:
+Full SDK documentation: [docs/sdk.md](docs/sdk.md)
 
-```go
-import "github.com/tom/awn/client"
+## RPC Reference
 
-c := client.New("ws://127.0.0.1:7600")
-c.Ping()
-session, _ := c.Create("yazi")
-screen, _ := c.Screenshot(session.ID)
-_ = c.Resize(session.ID, 40, 120)
-elements, _ := c.Detect(session.ID)
-structured, _ := c.DetectStructured(session.ID)
-_ = c.Record(session.ID, "session.cast")
-_ = c.Input(session.ID, "q")
-sessions, _ := c.List()
-_ = c.Close(session.ID)
+JSON-RPC 2.0 over WebSocket. See [docs/rpc.md](docs/rpc.md).
+
+## Error Catalog
+
+All errors are structured with `code`, `category`, `message`, `retryable`, `suggestion`, and optional `context`. See [docs/errors.md](docs/errors.md).
+
+## Security
+
+### Default: Unix domain socket
+
+The daemon listens on `~/.awn/daemon.sock` with `0600` permissions. Only the owning user can connect.
+
+### Optional: TCP mode
+
+TCP requires an explicit `--tcp` flag on the daemon and `AWN_TOKEN` must be set:
+
+```bash
+AWN_TOKEN=secret awnd --tcp
+AWN_TOKEN=secret awn screenshot
 ```
 
-## Configuration
+The daemon refuses to start in TCP mode without a token.
+
+## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AWN_ADDR` | `ws://localhost:7600` | Daemon address |
-| `AWN_TOKEN` | *(none)* | Bearer token for authentication |
-| `AWN_STATE_DIR` | `~/.cache/awn/sessions` | Session snapshot directory |
+| `AWN_SOCKET` | `~/.awn/daemon.sock` | Unix socket path |
+| `AWN_ADDR` | *(none)* | TCP WebSocket address (enables TCP mode) |
+| `AWN_TOKEN` | *(none)* | Bearer token (required for TCP) |
+| `AWN_STATE_DIR` | `~/.cache/awn/sessions` | Session persistence directory |
 | `AWN_MAX_CONNECTIONS` | `10` | Max concurrent WebSocket connections |
 
-## RPC
+## Supported Keys
 
-JSON-RPC 2.0 over WebSocket. See [docs/rpc.md](docs/rpc.md) for the full method reference.
+`Enter`, `Tab`, `Backspace`, `Escape`, `Space`, `Delete`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `F1`–`F12`, `Ctrl+A`–`Ctrl+Z`, `Ctrl+[`, `Ctrl+]`, `Ctrl+\`

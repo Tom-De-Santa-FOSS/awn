@@ -12,6 +12,14 @@ import (
 	"github.com/tom/awn"
 )
 
+func currentWorkingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
 // Client connects to the awn daemon and provides typed methods for all operations.
 type Client struct {
 	cfg clientConfig
@@ -56,6 +64,9 @@ func (c *Client) Create(ctx context.Context, command string, args ...string) (*S
 	if len(args) > 0 {
 		params["args"] = args
 	}
+	if dir := currentWorkingDir(); dir != "" {
+		params["dir"] = dir
+	}
 	var resp Session
 	if err := c.call(ctx, "create", params, &resp); err != nil {
 		return nil, err
@@ -86,6 +97,8 @@ func (c *Client) CreateWithOpts(ctx context.Context, command string, opts Create
 	}
 	if opts.Dir != "" {
 		params["dir"] = opts.Dir
+	} else if dir := currentWorkingDir(); dir != "" {
+		params["dir"] = dir
 	}
 	if opts.Record {
 		params["record"] = true

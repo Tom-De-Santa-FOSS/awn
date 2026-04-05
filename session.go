@@ -33,6 +33,7 @@ type Session struct {
 	events        []castEvent
 	snapshot      *Screen
 	restored      bool
+	controlBuf    []byte
 	startedAt     time.Time
 	updatedAt     time.Time
 	persist       func()
@@ -69,11 +70,20 @@ func (s *Session) readLoop() {
 			return
 		}
 
+		var responses []string
 		s.mu.Lock()
-		_, _ = s.term.Write(buf[:n])
-		s.appendOutput(buf[:n])
+		visible, queryResponses := s.filterTerminalQueriesLocked(buf[:n])
+		responses = append(responses, queryResponses...)
+		if len(visible) > 0 {
+			_, _ = s.term.Write(visible)
+			s.appendOutput(visible)
+		}
 		persist := s.persist
 		s.mu.Unlock()
+
+		for _, response := range responses {
+			_, _ = s.ptmx.WriteString(response)
+		}
 
 		if persist != nil {
 			persist()
@@ -84,6 +94,88 @@ func (s *Session) readLoop() {
 		}
 		s.notifySubscribers()
 	}
+}
+
+func (s *Session) filterTerminalQueriesLocked(data []byte) ([]byte, []string) {
+	if len(s.controlBuf) > 0 {
+		combined := make([]byte, 0, len(s.controlBuf)+len(data))
+		combined = append(combined, s.controlBuf...)
+		combined = append(combined, data...)
+		data = combined
+		s.controlBuf = s.controlBuf[:0]
+	}
+
+	visible := make([]byte, 0, len(data))
+	responses := make([]string, 0, 2)
+
+	for i := 0; i < len(data); {
+		handled, consumed, response, incomplete := s.parseTerminalQueryLocked(data[i:])
+		if incomplete {
+			s.controlBuf = append(s.controlBuf[:0], data[i:]...)
+			break
+		}
+		if handled {
+			if response != "" {
+				responses = append(responses, response)
+			}
+			i += consumed
+			continue
+		}
+		visible = append(visible, data[i])
+		i++
+	}
+
+	return visible, responses
+}
+
+func (s *Session) parseTerminalQueryLocked(data []byte) (handled bool, consumed int, response string, incomplete bool) {
+	if len(data) < 2 || data[0] != 0x1b || data[1] != '[' {
+		return false, 0, "", false
+	}
+
+	if len(data) == 2 {
+		return false, 0, "", true
+	}
+
+	switch data[2] {
+	case '5':
+		if len(data) < 4 {
+			return false, 0, "", true
+		}
+		if data[3] == 'n' {
+			return true, 4, "\x1b[0n", false
+		}
+	case '6':
+		if len(data) < 4 {
+			return false, 0, "", true
+		}
+		if data[3] == 'n' {
+			row, col := s.cursorPositionLocked()
+			return true, 4, fmt.Sprintf("\x1b[%d;%dR", row+1, col+1), false
+		}
+	case 'c':
+		return true, 3, "\x1b[?1;2c", false
+	case '0':
+		if len(data) < 4 {
+			return false, 0, "", true
+		}
+		if data[3] == 'c' {
+			return true, 4, "\x1b[?1;2c", false
+		}
+	}
+
+	return false, 0, "", false
+}
+
+func (s *Session) cursorPositionLocked() (int, int) {
+	if s.restored && s.snapshot != nil {
+		return s.snapshot.Cursor.Row, s.snapshot.Cursor.Col
+	}
+
+	s.term.Lock()
+	defer s.term.Unlock()
+	cur := s.term.Cursor()
+	return cur.Y, cur.X
 }
 
 func (s *Session) stopPersisting() {

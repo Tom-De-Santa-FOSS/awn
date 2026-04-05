@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -113,6 +114,9 @@ func TestCreate(t *testing.T) {
 		if p["command"] != "bash" {
 			t.Fatalf("command = %v", p["command"])
 		}
+		if p["dir"] == "" {
+			t.Fatal("expected current working directory to be sent")
+		}
 		return map[string]string{"id": "sess-abc"}, nil
 	})
 	defer srv.Close()
@@ -123,6 +127,41 @@ func TestCreate(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if s.ID != "sess-abc" {
+		t.Fatalf("ID = %q", s.ID)
+	}
+}
+
+func TestCreateWithOpts_DefaultsDirToWorkingDirectory(t *testing.T) {
+	wd := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore Chdir: %v", err)
+		}
+	})
+
+	srv, url := mockServer(t, func(method string, params json.RawMessage) (any, error) {
+		var p map[string]any
+		json.Unmarshal(params, &p) //nolint:errcheck
+		if p["dir"] != wd {
+			t.Fatalf("dir = %v, want %q", p["dir"], wd)
+		}
+		return map[string]string{"id": "sess-cwd"}, nil
+	})
+	defer srv.Close()
+
+	c, _ := Connect(WithAddr(url))
+	s, err := c.CreateWithOpts(context.Background(), "bash", CreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateWithOpts: %v", err)
+	}
+	if s.ID != "sess-cwd" {
 		t.Fatalf("ID = %q", s.ID)
 	}
 }

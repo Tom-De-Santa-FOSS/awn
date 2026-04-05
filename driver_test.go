@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -370,6 +371,78 @@ func TestSession_SendMouseMove_WritesSGRSequence(t *testing.T) {
 	}
 }
 
+func TestSession_RespondsToDeviceStatusReport(t *testing.T) {
+	p := &duplexPTY{}
+	d := NewDriver(WithPTY(p))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	t.Cleanup(func() {
+		if p.peer != nil {
+			_ = p.peer.Close()
+		}
+		_ = d.Close(s.ID)
+	})
+
+	if _, err := p.peer.WriteString("\x1b[5n"); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	if got, want := readWithTimeout(t, p.peer, len("\x1b[0n")), "\x1b[0n"; got != want {
+		t.Fatalf("DSR response = %q, want %q", got, want)
+	}
+}
+
+func TestSession_RespondsToCursorPositionReport(t *testing.T) {
+	p := &duplexPTY{}
+	d := NewDriver(WithPTY(p))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	t.Cleanup(func() {
+		if p.peer != nil {
+			_ = p.peer.Close()
+		}
+		_ = d.Close(s.ID)
+	})
+
+	if _, err := p.peer.WriteString("hello"); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	if err := s.WaitForText("hello", time.Second); err != nil {
+		t.Fatalf("WaitForText: %v", err)
+	}
+	if _, err := p.peer.WriteString("\x1b[6n"); err != nil {
+		t.Fatalf("WriteString query: %v", err)
+	}
+	if got, want := readWithTimeout(t, p.peer, len("\x1b[1;6R")), "\x1b[1;6R"; got != want {
+		t.Fatalf("CPR response = %q, want %q", got, want)
+	}
+}
+
+func TestSession_RespondsToPrimaryDeviceAttributes(t *testing.T) {
+	p := &duplexPTY{}
+	d := NewDriver(WithPTY(p))
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	t.Cleanup(func() {
+		if p.peer != nil {
+			_ = p.peer.Close()
+		}
+		_ = d.Close(s.ID)
+	})
+
+	if _, err := p.peer.WriteString("\x1b[c"); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	if got, want := readWithTimeout(t, p.peer, len("\x1b[?1;2c")), "\x1b[?1;2c"; got != want {
+		t.Fatalf("DA1 response = %q, want %q", got, want)
+	}
+}
+
 func TestSession_Scrollback_ReturnsRecentLines(t *testing.T) {
 	p := &pipePTY{}
 	d := NewDriver(WithPTY(p))
@@ -489,6 +562,45 @@ type bidirPTY struct {
 
 func (b *bidirPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
 	return b.ptmx, nil
+}
+
+type duplexPTY struct {
+	peer *os.File
+}
+
+func (d *duplexPTY) Start(cmd *exec.Cmd, ws *pty.Winsize) (*os.File, error) {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, err
+	}
+	sessionFile := os.NewFile(uintptr(fds[0]), "pty-session")
+	d.peer = os.NewFile(uintptr(fds[1]), "pty-peer")
+	return sessionFile, nil
+}
+
+func readWithTimeout(t *testing.T, f *os.File, n int) string {
+	t.Helper()
+	type result struct {
+		data string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		buf := make([]byte, n)
+		m, err := f.Read(buf)
+		ch <- result{data: string(buf[:m]), err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Fatalf("Read: %v", res.err)
+		}
+		return res.data
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for PTY response")
+		return ""
+	}
 }
 
 func TestSession_ContainsText_EmptyString(t *testing.T) {

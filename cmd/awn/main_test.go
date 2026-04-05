@@ -550,6 +550,35 @@ func TestRun_CreateCommand_SetsCurrentSession(t *testing.T) {
 	}
 }
 
+func TestRun_CreateCommand_DefaultsDirToWorkingDirectory(t *testing.T) {
+	wd := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore Chdir: %v", err)
+		}
+	})
+
+	var gotParams map[string]any
+	_, err = run([]string{"create", "bash"}, func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams) //nolint:errcheck
+		return `{"id":"sess-1"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["dir"] != wd {
+		t.Fatalf("dir = %v, want %q", gotParams["dir"], wd)
+	}
+}
+
 func TestRun_ScreenshotCommand_UsesCurrentSession(t *testing.T) {
 	stateDir := t.TempDir()
 	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)

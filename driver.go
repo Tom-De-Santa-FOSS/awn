@@ -67,12 +67,25 @@ func (d *Driver) SessionWithConfig(cfg Config) (*Session, error) {
 		cfg.Scrollback = 1000
 	}
 
+	if cfg.Dir != "" {
+		info, err := os.Stat(cfg.Dir)
+		if err != nil || !info.IsDir() {
+			return nil, ErrInvalidDir(cfg.Dir)
+		}
+	}
+
 	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
 		fmt.Sprintf("COLUMNS=%d", cfg.Cols),
 		fmt.Sprintf("LINES=%d", cfg.Rows),
 	)
+	for k, v := range cfg.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	if cfg.Dir != "" {
+		cmd.Dir = cfg.Dir
+	}
 
 	ptmx, err := d.pty.Start(cmd, &pty.Winsize{
 		Rows: uint16(cfg.Rows),
@@ -220,11 +233,13 @@ func (d *Driver) CloseAll() {
 
 // Config holds session creation parameters.
 type Config struct {
-	Command    string   `json:"command"`
-	Args       []string `json:"args,omitempty"`
-	Rows       int      `json:"rows,omitempty"`
-	Cols       int      `json:"cols,omitempty"`
-	Scrollback int      `json:"scrollback,omitempty"`
+	Command    string            `json:"command"`
+	Args       []string          `json:"args,omitempty"`
+	Rows       int               `json:"rows,omitempty"`
+	Cols       int               `json:"cols,omitempty"`
+	Scrollback int               `json:"scrollback,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Dir        string            `json:"dir,omitempty"`
 }
 
 func (d *Driver) persistSession(sess *Session) {

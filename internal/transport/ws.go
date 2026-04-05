@@ -4,12 +4,14 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/tom/awn"
@@ -81,6 +83,10 @@ type Server struct {
 	maxConn    int32
 	activeConn atomic.Int32
 	log        *zap.Logger
+
+	mu       sync.Mutex
+	listener net.Listener
+	sockPath string // non-empty when listening on a Unix socket
 }
 
 // NewServer creates a WebSocket JSON-RPC server.
@@ -88,7 +94,15 @@ func NewServer(d Dispatcher, addr string, token string, logger *zap.Logger) *Ser
 	return &Server{handler: d, addr: addr, token: token, maxConn: maxConnectionsFromEnv(), log: logger}
 }
 
-// ListenAndServe starts the WebSocket server.
+// mux returns the HTTP mux with handlers registered.
+func (s *Server) mux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleWS)
+	mux.HandleFunc("/health", s.handleHealth)
+	return mux
+}
+
+// ListenAndServe starts the WebSocket server on TCP.
 // It refuses to start without a token when the listen address is non-loopback.
 func (s *Server) ListenAndServe() error {
 	if s.token == "" {
@@ -102,12 +116,65 @@ func (s *Server) ListenAndServe() error {
 		}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleWS)
-	mux.HandleFunc("/health", s.handleHealth)
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.listener = ln
+	s.mu.Unlock()
 
 	s.log.Info("daemon listening", zap.String("addr", s.addr))
-	return http.ListenAndServe(s.addr, mux)
+	return http.Serve(ln, s.mux())
+}
+
+// ListenAndServeUnix starts the WebSocket server on a Unix domain socket.
+// It removes stale socket files and sets 0600 permissions.
+func (s *Server) ListenAndServeUnix(path string) error {
+	// Remove stale socket if it exists and no one is listening.
+	if _, err := os.Stat(path); err == nil {
+		conn, dialErr := net.DialTimeout("unix", path, 200*time.Millisecond)
+		if dialErr != nil {
+			// Stale socket — remove it.
+			os.Remove(path)
+		} else {
+			conn.Close()
+			return fmt.Errorf("another daemon is already listening on %s", path)
+		}
+	}
+
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return err
+	}
+	// Set owner-only permissions.
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return fmt.Errorf("chmod socket: %w", err)
+	}
+
+	s.mu.Lock()
+	s.listener = ln
+	s.sockPath = path
+	s.mu.Unlock()
+
+	s.log.Info("daemon listening", zap.String("socket", path))
+	return http.Serve(ln, s.mux())
+}
+
+// Close shuts down the server and removes the Unix socket file if applicable.
+func (s *Server) Close() {
+	s.mu.Lock()
+	ln := s.listener
+	path := s.sockPath
+	s.mu.Unlock()
+
+	if ln != nil {
+		ln.Close()
+	}
+	if path != "" {
+		os.Remove(path)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

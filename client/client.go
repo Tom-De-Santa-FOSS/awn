@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -10,13 +11,21 @@ import (
 	"github.com/tom/awn/internal/rpc"
 )
 
+// Client connects to the awn daemon via WebSocket (TCP or Unix socket).
 type Client struct {
-	addr  string
-	token string
+	addr   string // WebSocket URL for TCP mode (e.g. "ws://localhost:7600")
+	token  string
+	socket string // Unix socket path; takes precedence over addr when non-empty
 }
 
+// New creates a client that connects via TCP WebSocket.
 func New(addr string) *Client {
 	return &Client{addr: addr}
+}
+
+// NewUnix creates a client that connects via a Unix domain socket.
+func NewUnix(socketPath string) *Client {
+	return &Client{socket: socketPath}
 }
 
 func (c *Client) Ping() (*rpc.PingResponse, error) {
@@ -95,7 +104,19 @@ func (c *Client) call(method string, params any, out any) error {
 	if c.token != "" {
 		header.Set("Authorization", "Bearer "+c.token)
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(c.addr, header)
+
+	var conn *websocket.Conn
+	var err error
+	if c.socket != "" {
+		dialer := websocket.Dialer{
+			NetDial: func(network, addr string) (net.Conn, error) {
+				return net.Dial("unix", c.socket)
+			},
+		}
+		conn, _, err = dialer.Dial("ws://localhost/", header)
+	} else {
+		conn, _, err = websocket.DefaultDialer.Dial(c.addr, header)
+	}
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

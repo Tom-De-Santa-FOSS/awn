@@ -49,6 +49,14 @@ func defaultStateDir() string {
 	return filepath.Join(home, ".awn")
 }
 
+func currentWorkingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
+}
+
 // readCurrentSession reads the current session ID from the state directory.
 func readCurrentSession(stateDir string) string {
 	if stateDir == "" {
@@ -186,7 +194,7 @@ func runWithOpts(args []string, opts *runOpts) (string, error) {
 		envVars := map[string]string{}
 		record := false
 		recordPath := ""
-		dir := ""
+		dir := currentWorkingDir()
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
 			case "--env", "-e":

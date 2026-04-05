@@ -1,15 +1,17 @@
 .PHONY: build daemon cli mcp clean test test-scripts test-all lint fmt
 
+LDFLAGS := -ldflags "-s -w -X main.version=$(shell cat VERSION) -X main.commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo none)"
+
 build: daemon cli mcp
 
 daemon:
-	go build -o bin/awnd ./cmd/awnd
+	go build $(LDFLAGS) -o bin/awnd ./cmd/awnd
 
 cli:
-	go build -o bin/awn ./cmd/awn
+	go build $(LDFLAGS) -o bin/awn ./cmd/awn
 
 mcp:
-	go build -o bin/awn-mcp ./cmd/awn-mcp
+	go build $(LDFLAGS) -o bin/awn-mcp ./cmd/awn-mcp
 
 clean:
 	rm -rf bin/

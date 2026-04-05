@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,9 @@ import (
 	"github.com/tom/awn/awtreestrategy"
 	"github.com/tom/awn/internal/rpc"
 )
+
+var version = "dev"
+var commit = "none"
 
 // newServer creates an MCP server with all AWN tools registered.
 func newServer(d rpc.Dispatcher) *server.MCPServer {
@@ -186,6 +190,12 @@ func newServer(d rpc.Dispatcher) *server.MCPServer {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" {
+			fmt.Printf("awn-mcp v%s (%s)\n", version, commit)
+			os.Exit(0)
+		}
+	}
 	driver := awn.NewDriver()
 	handler := rpc.NewHandler(driver, awtreestrategy.New())
 	s := newServer(handler)

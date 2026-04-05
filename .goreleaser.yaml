@@ -1,0 +1,71 @@
+version: 2
+
+project_name: awn
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: awn
+    binary: awn
+    main: ./cmd/awn
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+
+  - id: awnd
+    binary: awnd
+    main: ./cmd/awnd
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+
+  - id: awn-mcp
+    binary: awn-mcp
+    main: ./cmd/awn-mcp
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+
+archives:
+  - id: default
+    builds:
+      - awn
+      - awnd
+      - awn-mcp
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+brews:
+  - name: awn
+    ids:
+      - default
+    repository:
+      owner: Tom-De-Santa-FOSS
+      name: homebrew-tap
+    homepage: "https://github.com/tom/awn"
+    description: "AWN terminal session management CLI"
+    install: |
+      bin.install "awn"
+      bin.install "awnd"
+      bin.install "awn-mcp"

@@ -147,3 +147,58 @@ func TestClient_RoutesCoreMethods(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+func TestClient_DetectStructuredReturnsTreeAndRefs(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade: %v", err)
+		}
+		defer conn.Close() //nolint:errcheck
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("ReadMessage: %v", err)
+		}
+		var req struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+			ID     int            `json:"id"`
+		}
+		if err := json.Unmarshal(msg, &req); err != nil {
+			t.Fatalf("Unmarshal request: %v", err)
+		}
+		if req.Method != "detect" {
+			t.Fatalf("method = %q, want detect", req.Method)
+		}
+		if req.Params["format"] != "structured" {
+			t.Fatalf("format = %#v, want structured", req.Params["format"])
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+			"elements": []map[string]any{{"id": 1, "type": "button", "label": "OK", "ref": "button[1]", "role": "button"}},
+			"tree":     []map[string]any{{"id": 1, "type": "button", "label": "OK", "ref": "button[1]", "role": "button"}},
+			"viewport": map[string]any{"row": 0, "col": 0, "width": 80, "height": 24},
+		}}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatalf("Marshal response: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			t.Fatalf("WriteMessage: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	c := New("ws" + strings.TrimPrefix(srv.URL, "http"))
+	resp, err := c.DetectStructured("sess-123")
+	if err != nil {
+		t.Fatalf("DetectStructured: %v", err)
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Ref != "button[1]" {
+		t.Fatalf("elements = %#v", resp.Elements)
+	}
+	if len(resp.Tree) != 1 || resp.Tree[0].Role != "button" {
+		t.Fatalf("tree = %#v", resp.Tree)
+	}
+}

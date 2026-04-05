@@ -484,3 +484,44 @@ func TestRun_ScreenshotFullFlag_RequestsFullFormat(t *testing.T) {
 		t.Fatal("expected JSON output for --full")
 	}
 }
+
+func TestRun_DetectStructuredFlag_RequestsStructuredFormat(t *testing.T) {
+	var gotParams map[string]any
+	stdout, err := run([]string{"detect", "sess-123", "--structured"}, func(_ string, method string, params any) (string, error) {
+		if method != "detect" {
+			t.Fatalf("method = %q, want detect", method)
+		}
+		data, marshalErr := json.Marshal(params)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		if unmarshalErr := json.Unmarshal(data, &gotParams); unmarshalErr != nil {
+			return "", unmarshalErr
+		}
+		return `{"elements":[{"type":"button","label":"Save","ref":"button[1]","role":"button","description":"button \"Save\" focused","bounds":{"row":1,"col":2,"width":6,"height":1},"focused":true}],"tree":[{"type":"button","label":"Save","ref":"button[1]","role":"button","description":"button \"Save\" focused","bounds":{"row":1,"col":2,"width":6,"height":1},"focused":true}],"viewport":{"row":0,"col":0,"width":80,"height":24}}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["format"] != "structured" {
+		t.Fatalf("format = %#v, want structured", gotParams["format"])
+	}
+	if !strings.Contains(stdout, "@button[1] [button] \"Save\"") {
+		t.Fatalf("stdout = %q, want structured detect text", stdout)
+	}
+	if !strings.Contains(stdout, "focused") {
+		t.Fatalf("stdout = %q, want focused marker", stdout)
+	}
+}
+
+func TestRun_DetectStructuredFlag_WithJSON_PrintsRawJSON(t *testing.T) {
+	stdout, err := run([]string{"--json", "detect", "sess-123", "--structured"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"elements":[{"type":"button","label":"Save","ref":"button[1]"}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, `"button[1]"`) {
+		t.Fatalf("stdout = %q, want raw JSON", stdout)
+	}
+}

@@ -93,6 +93,46 @@ func TestDetect_ReverseButton_IsFocused(t *testing.T) {
 	}
 }
 
+func TestDetectStructured_ButtonIncludesRefRoleAndDescription(t *testing.T) {
+	s := New()
+	screen := makeScreen(3, 20)
+
+	setText(screen, 1, 5, "[OK]", awn.DefaultColor, awn.DefaultColor, awn.AttrReverse)
+
+	result := s.DetectStructured(screen)
+	var el awn.DetectElement
+	found := false
+	for _, candidate := range result.Elements {
+		if candidate.Type == "button" {
+			el = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected button element in %#v", result.Elements)
+	}
+	if el.Ref != "button[1]" {
+		t.Fatalf("ref = %q, want %q", el.Ref, "button[1]")
+	}
+	if el.Role != "button" {
+		t.Fatalf("role = %q, want %q", el.Role, "button")
+	}
+	if el.Description == "" {
+		t.Fatal("expected description to be populated")
+	}
+	foundTree := false
+	for _, node := range result.Tree {
+		if node.Ref == "button[1]" {
+			foundTree = true
+			break
+		}
+	}
+	if !foundTree {
+		t.Fatalf("tree = %#v", result.Tree)
+	}
+}
+
 // makeScreen creates an awn.Screen filled with spaces.
 func makeScreen(rows, cols int) *awn.Screen {
 	cells := make([][]awn.Cell, rows)

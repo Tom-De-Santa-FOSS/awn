@@ -39,6 +39,30 @@ type integStubStrategy struct{}
 
 func (integStubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
 
+func (integStubStrategy) DetectStructured(screen *awn.Screen) *awn.DetectResult {
+	return &awn.DetectResult{
+		Elements: []awn.DetectElement{{
+			ID:          1,
+			Type:        "button",
+			Label:       "OK",
+			Description: `button "OK"`,
+			Role:        "button",
+			Ref:         "button[1]",
+			Bounds:      awn.Rect{Row: 0, Col: 0, Width: 4, Height: 1},
+		}},
+		Tree: []awn.DetectTreeNode{{
+			ID:          1,
+			Type:        "button",
+			Label:       "OK",
+			Description: `button "OK"`,
+			Role:        "button",
+			Ref:         "button[1]",
+			Bounds:      awn.Rect{Row: 0, Col: 0, Width: 4, Height: 1},
+		}},
+		Viewport: awn.Rect{Row: 0, Col: 0, Width: 80, Height: 24},
+	}
+}
+
 // resultText extracts the text content from a CallToolResult.
 func resultText(r *mcp.CallToolResult) string {
 	if r == nil || len(r.Content) == 0 {
@@ -131,6 +155,22 @@ func TestIntegration_MCP_full_session_lifecycle(t *testing.T) {
 	screenshotText := resultText(screenshotResult)
 	if !strings.Contains(screenshotText, "hello") {
 		t.Fatalf("awn_screenshot: expected 'hello' in response, got: %q", screenshotText)
+	}
+
+	detectReq := mcp.CallToolRequest{}
+	detectReq.Params.Name = "awn_detect"
+	detectReq.Params.Arguments = map[string]any{"id": sessionID, "format": "structured"}
+
+	detectResult, err := tools["awn_detect"].Handler(ctx, detectReq)
+	if err != nil {
+		t.Fatalf("awn_detect: unexpected error: %v", err)
+	}
+	if detectResult == nil || detectResult.IsError {
+		t.Fatalf("awn_detect: expected success, got error result: %v", resultText(detectResult))
+	}
+	detectText := resultText(detectResult)
+	if !strings.Contains(detectText, `"ref":"button[1]"`) {
+		t.Fatalf("awn_detect: expected structured detect ref, got: %q", detectText)
 	}
 
 	// --- awn_input ---

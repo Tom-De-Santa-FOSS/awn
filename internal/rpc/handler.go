@@ -125,7 +125,7 @@ func NewHandler(d *awn.Driver, strategy awn.Strategy, logger ...*zap.Logger) *Ha
 			return nil, h.Wait(req)
 		},
 		"detect": func(p json.RawMessage) (any, error) {
-			var req IDRequest
+			var req DetectRequest
 			if err := json.Unmarshal(p, &req); err != nil {
 				return nil, errBadParams(err)
 			}
@@ -180,6 +180,11 @@ type IDRequest struct {
 	ID string `json:"id"`
 }
 
+type DetectRequest struct {
+	ID     string `json:"id"`
+	Format string `json:"format,omitempty"`
+}
+
 type InputRequest struct {
 	ID   string `json:"id"`
 	Data string `json:"data"`
@@ -222,7 +227,6 @@ type WaitRequest struct {
 	Regex   string `json:"regex,omitempty"`
 	Timeout int    `json:"timeout_ms,omitempty"`
 }
-
 
 type PipelineRequest struct {
 	ID          string         `json:"id"`
@@ -347,7 +351,10 @@ func buildScreenResponse(scr *awn.Screen, format string, elements []awn.Element,
 }
 
 type DetectResponse struct {
-	Elements []awn.Element `json:"elements"`
+	Elements []awn.DetectElement  `json:"elements"`
+	Tree     []awn.DetectTreeNode `json:"tree,omitempty"`
+	Viewport awn.Rect             `json:"viewport,omitempty"`
+	Scrolled bool                 `json:"scrolled,omitempty"`
 }
 
 // --- Methods ---
@@ -475,13 +482,37 @@ func (h *Handler) Wait(req WaitRequest) error {
 	return nil
 }
 
-func (h *Handler) Detect(req IDRequest) (*DetectResponse, error) {
+func (h *Handler) Detect(req DetectRequest) (*DetectResponse, error) {
 	sess := h.getSession(req.ID)
 	if sess == nil {
 		return nil, awn.ErrSessionNotFound(req.ID)
 	}
-	elements := sess.FindAll(h.strategy)
-	return &DetectResponse{Elements: elements}, nil
+	started := time.Now()
+	h.log.Debug("detect.start", zap.String("session_id", req.ID), zap.String("format", req.Format))
+	if req.Format == "" || req.Format == "flat" {
+		flat := sess.FindAll(h.strategy)
+		elements := make([]awn.DetectElement, len(flat))
+		for i, el := range flat {
+			elements[i] = awn.DetectElement{Type: el.Type, Label: el.Label, Bounds: el.Bounds, Focused: el.Focused}
+		}
+		h.log.Debug("detect.done", zap.String("session_id", req.ID), zap.String("format", "flat"), zap.Int("element_count", len(elements)), zap.Duration("duration", time.Since(started)))
+		return &DetectResponse{Elements: elements}, nil
+	}
+	structuredStrategy, ok := h.strategy.(awn.StructuredStrategy)
+	if !ok {
+		h.log.Warn("detect.structured_fallback", zap.String("session_id", req.ID), zap.String("format", req.Format))
+		flat := sess.FindAll(h.strategy)
+		elements := make([]awn.DetectElement, len(flat))
+		for i, el := range flat {
+			elements[i] = awn.DetectElement{Type: el.Type, Label: el.Label, Bounds: el.Bounds, Focused: el.Focused}
+		}
+		h.log.Debug("detect.done", zap.String("session_id", req.ID), zap.String("format", "flat"), zap.Int("element_count", len(elements)), zap.Duration("duration", time.Since(started)))
+		return &DetectResponse{Elements: elements}, nil
+	}
+	result := structuredStrategy.DetectStructured(sess.Screen())
+	rootCount := len(result.Tree)
+	h.log.Debug("detect.done", zap.String("session_id", req.ID), zap.String("format", "structured"), zap.Int("element_count", len(result.Elements)), zap.Int("root_count", rootCount), zap.Bool("scrolled", result.Scrolled), zap.Duration("duration", time.Since(started)))
+	return &DetectResponse{Elements: result.Elements, Tree: result.Tree, Viewport: result.Viewport, Scrolled: result.Scrolled}, nil
 }
 
 func (h *Handler) Close(req IDRequest) error {

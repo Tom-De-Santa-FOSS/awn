@@ -31,6 +31,8 @@ type DetectResponse struct {
 	Elements []awn.Element `json:"elements"`
 }
 
+type StructuredDetectResponse = rpc.DetectResponse
+
 func (c *Client) Create(command string, args ...string) (*rpc.CreateResponse, error) {
 	var resp rpc.CreateResponse
 	params := rpc.CreateRequest{Command: command, Args: args, Rows: awn.DefaultRows, Cols: awn.DefaultCols}
@@ -62,7 +64,15 @@ func (c *Client) Record(id, path string) error {
 
 func (c *Client) Detect(id string) (*DetectResponse, error) {
 	var resp DetectResponse
-	if err := c.call("detect", rpc.IDRequest{ID: id}, &resp); err != nil {
+	if err := c.call("detect", rpc.DetectRequest{ID: id}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DetectStructured(id string) (*StructuredDetectResponse, error) {
+	var resp StructuredDetectResponse
+	if err := c.call("detect", rpc.DetectRequest{ID: id, Format: "structured"}, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

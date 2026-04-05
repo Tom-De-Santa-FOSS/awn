@@ -12,6 +12,7 @@ TUI automation for AI agents. Manage headless terminal sessions — screenshot, 
 
 - Headless terminal sessions with full PTY emulation
 - AI-friendly element detection via [awtree](https://github.com/Tom-De-Santa-FOSS/awtree)
+- Agent-friendly structured detect output with refs, roles, descriptions, and tree data
 - JSON-RPC 2.0 over WebSocket — use from any language
 - MCP server included for direct LLM tool integration
 - Session persistence and restore across daemon restarts
@@ -32,6 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/Tom-De-Santa-FOSS/awn/master/instal
 awn daemon start                # start the daemon
 awn create yazi                 # launch a session
 awn screenshot <id>             # capture the screen
+awn detect <id> --structured    # inspect semantic UI elements
 awn close <id>                  # terminate the session
 ```
 
@@ -55,6 +57,7 @@ awn daemon status                      # check daemon status
 awn screenshot <id>                    # render screen as text
 awn screenshot <id> --json             # full JSON response
 awn screenshot <id> --full             # screen + detected elements
+awn screenshot <id> --structured       # semantic state + detected elements (JSON)
 awn screenshot <id> --diff             # changed rows since last screenshot
 awn screenshot <id> --scrollback 100   # include scrollback history
 ```
@@ -97,10 +100,14 @@ awn pipeline <id> '[                           # batch multiple steps
 ### Other
 
 ```bash
-awn detect <id>                        # accessibility tree
+awn detect <id>                        # flat JSON element list
+awn detect <id> --structured           # human-readable semantic element list
+awn detect <id> --structured --json    # full structured JSON for agents
 awn resize <id> 40 120                 # resize session rows/cols
 awn record <id> session.cast           # write asciicast v2 recording
 ```
+
+Structured detect keeps the agent-facing metadata that awtree already produces: snapshot-local `ref` handles, semantic `role`, `description`, tree structure, and viewport information. The default `--structured` CLI output is meant for people, while `--json` preserves the full machine-readable contract for agents.
 
 ## Go SDK
 
@@ -132,6 +139,7 @@ session, _ := c.Create("yazi")
 screen, _ := c.Screenshot(session.ID)
 _ = c.Resize(session.ID, 40, 120)
 elements, _ := c.Detect(session.ID)
+structured, _ := c.DetectStructured(session.ID)
 _ = c.Record(session.ID, "session.cast")
 _ = c.Input(session.ID, "q")
 sessions, _ := c.List()

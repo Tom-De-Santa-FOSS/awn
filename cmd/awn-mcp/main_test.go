@@ -200,3 +200,31 @@ func TestTool_list_dispatches_to_list_method(t *testing.T) {
 		t.Fatalf("expected success result, got error or nil")
 	}
 }
+
+func TestTool_detect_forwards_structured_format(t *testing.T) {
+	fake := &fakeDispatcher{result: map[string]any{"elements": []map[string]any{{"ref": "button[1]"}}}}
+	s := newServer(fake)
+	tool := s.ListTools()["awn_detect"]
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "awn_detect"
+	req.Params.Arguments = map[string]any{"id": "sess-123", "format": "structured"}
+
+	result, err := tool.Handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil || result.IsError {
+		t.Fatalf("expected success result, got %#v", result)
+	}
+	if fake.method != "detect" {
+		t.Fatalf("dispatched to %q, want detect", fake.method)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(fake.params, &got); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if got["format"] != "structured" {
+		t.Fatalf("format = %#v, want structured", got["format"])
+	}
+}

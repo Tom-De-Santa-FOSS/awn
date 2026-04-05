@@ -13,35 +13,50 @@ Headless terminal session management via a background daemon. Manage PTY session
 Every terminal automation follows this pattern:
 
 1. **Start daemon**: `awn daemon start`
-2. **Create session**: `awn create <command>` (returns `{id}`)
-3. **Interact**: Screenshot, send input, detect elements, wait for output
-4. **Clean up**: `awn close <id>`
+2. **Create session**: `awn create <command>` (returns `{id}`, sets current session)
+3. **Interact**: Screenshot, send input, detect elements, wait for output (session ID optional — uses current)
+4. **Clean up**: `awn close` (clears current session)
 
 ```bash
 awn daemon start
 awn create bash
-# Output: {"id":"abc123"}
+# Output: {"id":"abc123"} — automatically becomes current session
 
-awn screenshot abc123                # capture screen as text
-awn detect abc123 --structured       # friendly semantic element list
-awn detect abc123 --structured --json # full structured detect payload for agents
-awn type abc123 "ls -la"             # send literal text
-awn press abc123 Enter               # send named key
-awn wait abc123 --text "$"           # wait for prompt
-awn screenshot abc123 --full         # screen + detected elements
-awn close abc123
+awn show                             # capture screen as text (alias for screenshot)
+awn inspect                          # human-readable UI elements (alias for detect)
+awn inspect --json                   # full structured detect payload for agents
+awn type "ls -la"                    # send literal text
+awn press Enter                      # send named key
+awn wait --text "$"                  # wait for prompt
+awn screenshot --full                # screen + detected elements
+awn close                            # terminate and clear current session
 ```
+
+### Command Aliases
+
+| Alias | Command |
+|-------|---------|
+| `open` | `create` |
+| `show` | `screenshot` |
+| `inspect` | `detect` |
+
+### Session Resolution
+
+Commands resolve session IDs in this order:
+1. `--session <id>` / `-s <id>` flag (explicit)
+2. Current session (set by last `awn create`)
+3. First positional arg (backwards compatible)
 
 ## Command Chaining
 
-Commands can be chained with `&&` in a single shell invocation. The daemon persists between commands, so chaining is safe and more efficient than separate calls.
+Commands can be chained with `&&` in a single shell invocation. The daemon persists between commands, and the current session is tracked automatically.
 
 ```bash
-# Chain create + type + press + wait in one call
-awn create bash && awn type $ID "ls -la" && awn press $ID Enter && awn wait $ID --stable
+# Chain create + type + press + wait — no ID needed after create
+awn create bash && awn type "ls -la" && awn press Enter && awn wait --stable
 
 # Multi-step interaction
-awn type $ID "cd /tmp" && awn press $ID Enter && awn wait $ID --text "$" && awn screenshot $ID
+awn type "cd /tmp" && awn press Enter && awn wait --text "$" && awn show
 ```
 
 **When to chain:** Use `&&` when you don't need to read the output of an intermediate command before proceeding. Run commands separately when you need to parse output between steps (e.g., screenshot to discover UI elements, then interact).
@@ -51,9 +66,9 @@ For complex multi-step workflows, prefer `awn pipeline` — it batches steps in 
 ## Sessions
 
 ```bash
-awn create <command> [args...]         # start a PTY session, returns {id}
-awn list                               # show active sessions
-awn close <id>                         # terminate session
+awn create <command> [args...]         # start a PTY session, returns {id}, sets current
+awn list                               # show active sessions (* marks current)
+awn close [id]                         # terminate session (clears current if matching)
 awn ping                               # daemon health check
 awn daemon start                       # start the daemon in background
 awn daemon stop                        # stop the daemon
@@ -63,12 +78,12 @@ awn daemon status                      # check daemon status
 ## Screen Capture
 
 ```bash
-awn screenshot <id>                    # render screen as text lines
-awn screenshot <id> --json             # full JSON response
-awn screenshot <id> --full             # screen + detected UI elements + state
-awn screenshot <id> --structured       # semantic state + detected UI elements
-awn screenshot <id> --diff             # changed rows since last screenshot
-awn screenshot <id> --scrollback 100   # include scrollback history
+awn screenshot [id]                    # render screen as text lines
+awn screenshot [id] --json             # full JSON response
+awn screenshot [id] --full             # screen + detected UI elements + state
+awn screenshot [id] --structured       # semantic state + detected UI elements
+awn screenshot [id] --diff             # changed rows since last screenshot
+awn screenshot [id] --scrollback 100   # include scrollback history
 ```
 
 Screenshot formats control what the response includes:
@@ -83,13 +98,13 @@ Screenshot formats control what the response includes:
 ## Input
 
 ```bash
-awn type <id> "hello world"            # send literal text (no Enter)
-awn press <id> Enter                   # send a named key
-awn press <id> Ctrl+C                  # send key combo
-awn input <id> "raw data"              # send raw bytes/escape sequences
-awn mouse-click <id> 10 12             # click at row col
-awn mouse-click <id> 10 12 1           # click with button (0=left default)
-awn mouse-move <id> 10 12              # move cursor to row col
+awn type [id] "hello world"            # send literal text (no Enter)
+awn press [id] Enter                   # send a named key
+awn press [id] Ctrl+C                  # send key combo
+awn input [id] "raw data"              # send raw bytes/escape sequences
+awn mouse-click [id] 10 12             # click at row col
+awn mouse-click [id] 10 12 1           # click with button (0=left default)
+awn mouse-move [id] 10 12              # move cursor to row col
 ```
 
 ### Supported Keys
@@ -99,11 +114,11 @@ Named keys for `awn press`: `Enter`, `Tab`, `Backspace`, `Escape`, `Space`, `Del
 ## Waiting
 
 ```bash
-awn wait <id> --text "Status"          # block until text appears
-awn wait <id> --gone "Loading"         # block until text disappears
-awn wait <id> --regex "v\d+\.\d+"     # block until regex matches
-awn wait <id> --stable                 # block until screen stops changing
-awn wait <id> --timeout 10000          # set timeout in ms (default 5000)
+awn wait [id] --text "Status"          # block until text appears
+awn wait [id] --gone "Loading"         # block until text disappears
+awn wait [id] --regex "v\d+\.\d+"     # block until regex matches
+awn wait [id] --stable                 # block until screen stops changing
+awn wait [id] --timeout 10000          # set timeout in ms (default 5000)
 ```
 
 Exactly one condition must be provided per wait call. Default timeout is 5000ms. The `--stable` condition uses a 500ms threshold.
@@ -112,12 +127,12 @@ Exactly one condition must be provided per wait call. Default timeout is 5000ms.
 
 ```bash
 # exec: type input + Enter, then wait for output
-awn exec <id> "ls -la"                         # wait for screen to stabilize
-awn exec <id> "make" --wait-text "done"        # wait for specific text instead
-awn exec <id> "cargo build" --timeout 30000    # custom timeout
+awn exec [id] "ls -la"                         # wait for screen to stabilize
+awn exec [id] "make" --wait-text "done"        # wait for specific text instead
+awn exec [id] "cargo build" --timeout 30000    # custom timeout
 
 # pipeline: batch multiple steps as JSON
-awn pipeline <id> '[
+awn pipeline [id] '[
   {"type": "type", "text": "ls -la"},
   {"type": "press", "keys": "Enter"},
   {"type": "wait", "text": "$"},
@@ -125,7 +140,7 @@ awn pipeline <id> '[
 ]'
 
 # stop on first error
-awn pipeline <id> '[...]' --stop-on-error
+awn pipeline [id] '[...]' --stop-on-error
 ```
 
 ### Pipeline Step Types
@@ -142,18 +157,18 @@ awn pipeline <id> '[...]' --stop-on-error
 ## Detection
 
 ```bash
-awn detect <id>                        # flat JSON element list
-awn detect <id> --structured           # human-readable semantic element list
-awn detect <id> --structured --json    # full structured JSON with refs/tree
+awn detect [id]                        # human-readable element list (default)
+awn detect [id] --json                 # full structured JSON with refs/tree
+awn detect [id] --verbose              # verbose human-readable with refs and bounds
 ```
 
-Default detect stays backward-compatible and returns a flat JSON element list. Structured detect preserves agent-facing metadata from awtree including snapshot-local `ref` handles, semantic `role`, `description`, tree structure, viewport information, and state flags. Use the plain `--structured` output for humans and `--structured --json` when an agent needs the full contract.
+Detect defaults to human-readable output showing roles and labels. Use `--json` for the full structured payload with refs, tree data, and viewport information. Use `--verbose` for a detailed view including refs, bounds, and descriptions.
 
 ## Other
 
 ```bash
-awn resize <id> 40 120                 # resize session rows/cols
-awn record <id> session.cast           # write asciicast v2 recording
+awn resize [id] 40 120                 # resize session rows/cols
+awn record [id] session.cast           # write asciicast v2 recording
 ```
 
 ## Common Patterns
@@ -162,29 +177,29 @@ awn record <id> session.cast           # write asciicast v2 recording
 
 ```bash
 awn create bash
-awn exec $ID "ls -la"
-awn exec $ID "cd /tmp" --wait-text "$"
-awn exec $ID "pwd"
-awn screenshot $ID
-awn close $ID
+awn exec "ls -la"
+awn exec "cd /tmp" --wait-text "$"
+awn exec "pwd"
+awn show
+awn close
 ```
 
 ### TUI Application Automation
 
 ```bash
 awn create htop
-awn screenshot $ID --full              # see screen + UI elements
-awn press $ID F2                       # open settings
-awn wait $ID --text "Setup"
-awn screenshot $ID --full
-awn press $ID q                        # quit
-awn close $ID
+awn show --full                        # see screen + UI elements
+awn press F2                           # open settings
+awn wait --text "Setup"
+awn show --full
+awn press q                            # quit
+awn close
 ```
 
 ### Multi-step Pipeline
 
 ```bash
-awn pipeline $ID '[
+awn pipeline '[
   {"type": "exec", "input": "git status"},
   {"type": "screenshot"},
   {"type": "exec", "input": "git diff --stat"},
@@ -195,9 +210,9 @@ awn pipeline $ID '[
 ### Wait for Slow Operations
 
 ```bash
-awn exec $ID "make build" --timeout 60000
+awn exec "make build" --timeout 60000
 # or with pipeline
-awn pipeline $ID '[
+awn pipeline '[
   {"type": "type", "text": "make build"},
   {"type": "press", "keys": "Enter"},
   {"type": "wait", "stable": true, "timeout_ms": 60000},

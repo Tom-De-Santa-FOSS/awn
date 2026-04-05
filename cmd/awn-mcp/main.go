@@ -164,6 +164,7 @@ func newServer(d rpc.Dispatcher) *server.MCPServer {
 	s.AddTool(mcp.NewTool("awn_detect",
 		mcp.WithDescription("Detect UI elements on the terminal screen"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Session ID")),
+		mcp.WithString("format", mcp.Description("Detection output format: flat or structured")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return dispatch(ctx, "detect", req)
 	})

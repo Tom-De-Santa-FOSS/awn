@@ -3,8 +3,11 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -344,5 +347,172 @@ func TestValidJSONRPCRequestDispatchesCorrectly(t *testing.T) {
 	}
 	if resp.Result == nil {
 		t.Error("expected non-nil result")
+	}
+}
+
+// --- Unix Socket Tests ---
+
+func TestListenAndServeUnix_BindsAndAcceptsConnections(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "test.sock")
+
+	d := &mockDispatcher{result: map[string]string{"status": "ok"}}
+	s := NewServer(d, "", "", zap.NewNop())
+
+	// Start server in background
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenAndServeUnix(sock)
+	}()
+
+	// Wait for socket to appear
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("socket never appeared: %v", err)
+	}
+
+	// Connect via Unix socket WebSocket
+	dialer := websocket.Dialer{
+		NetDial: func(network, addr string) (net.Conn, error) {
+			return net.Dial("unix", sock)
+		},
+	}
+	conn, _, err := dialer.Dial("ws://localhost/", nil)
+	if err != nil {
+		t.Fatalf("dial unix socket: %v", err)
+	}
+	defer conn.Close()
+
+	// Send a ping RPC
+	req := JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: 1}
+	data, _ := json.Marshal(req)
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var resp JSONRPCResponse
+	if err := json.Unmarshal(msg, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	s.Close()
+}
+
+func TestListenAndServeUnix_SocketPermissions(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "perm.sock")
+
+	d := &mockDispatcher{}
+	s := NewServer(d, "", "", zap.NewNop())
+
+	go func() { _ = s.ListenAndServeUnix(sock) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	info, err := os.Stat(sock)
+	if err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0o600 {
+		t.Errorf("socket permissions = %o, want 0600", perm)
+	}
+
+	s.Close()
+}
+
+func TestListenAndServeUnix_CleansUpStaleSocket(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "stale.sock")
+
+	// Create a stale socket file (not a real listener)
+	if err := os.WriteFile(sock, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("create stale file: %v", err)
+	}
+
+	d := &mockDispatcher{result: map[string]string{"status": "ok"}}
+	s := NewServer(d, "", "", zap.NewNop())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- s.ListenAndServeUnix(sock)
+	}()
+
+	// Wait for socket to appear and be usable
+	deadline := time.Now().Add(2 * time.Second)
+	var dialErr error
+	for time.Now().Before(deadline) {
+		dialer := websocket.Dialer{
+			NetDial: func(network, addr string) (net.Conn, error) {
+				return net.Dial("unix", sock)
+			},
+		}
+		conn, _, err := dialer.Dial("ws://localhost/", nil)
+		if err == nil {
+			conn.Close()
+			dialErr = nil
+			break
+		}
+		dialErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	if dialErr != nil {
+		t.Fatalf("could not connect after stale cleanup: %v", dialErr)
+	}
+
+	s.Close()
+}
+
+func TestListenAndServeUnix_CloseRemovesSocket(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "close.sock")
+
+	d := &mockDispatcher{}
+	s := NewServer(d, "", "", zap.NewNop())
+
+	go func() { _ = s.ListenAndServeUnix(sock) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(sock); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	s.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	if _, err := os.Stat(sock); !os.IsNotExist(err) {
+		t.Error("socket file should be removed after Close()")
+	}
+}
+
+func TestListenAndServeTCP_RefusesWithoutToken(t *testing.T) {
+	s := NewServer(&mockDispatcher{}, "0.0.0.0:0", "", zap.NewNop())
+	err := s.ListenAndServe()
+	if err == nil {
+		t.Fatal("expected error when binding to 0.0.0.0 without token")
+	}
+	if !strings.Contains(err.Error(), "AWN_TOKEN") {
+		t.Errorf("error = %q, want mention of AWN_TOKEN", err)
 	}
 }

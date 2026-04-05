@@ -23,6 +23,8 @@ awn create bash
 # Output: {"id":"abc123"}
 
 awn screenshot abc123                # capture screen as text
+awn detect abc123 --structured       # friendly semantic element list
+awn detect abc123 --structured --json # full structured detect payload for agents
 awn type abc123 "ls -la"             # send literal text
 awn press abc123 Enter               # send named key
 awn wait abc123 --text "$"           # wait for prompt
@@ -64,6 +66,7 @@ awn daemon status                      # check daemon status
 awn screenshot <id>                    # render screen as text lines
 awn screenshot <id> --json             # full JSON response
 awn screenshot <id> --full             # screen + detected UI elements + state
+awn screenshot <id> --structured       # semantic state + detected UI elements
 awn screenshot <id> --diff             # changed rows since last screenshot
 awn screenshot <id> --scrollback 100   # include scrollback history
 ```
@@ -139,10 +142,12 @@ awn pipeline <id> '[...]' --stop-on-error
 ## Detection
 
 ```bash
-awn detect <id>                        # accessibility tree of UI elements
+awn detect <id>                        # flat JSON element list
+awn detect <id> --structured           # human-readable semantic element list
+awn detect <id> --structured --json    # full structured JSON with refs/tree
 ```
 
-Returns elements with `Type`, `Label`, `Bounds` (Row, Col, Width, Height), and `Focused` state. Use with `awn screenshot <id> --full` to get both screen content and elements in one call.
+Default detect stays backward-compatible and returns a flat JSON element list. Structured detect preserves agent-facing metadata from awtree including snapshot-local `ref` handles, semantic `role`, `description`, tree structure, viewport information, and state flags. Use the plain `--structured` output for humans and `--structured --json` when an agent needs the full contract.
 
 ## Other
 
@@ -218,7 +223,7 @@ JSON-RPC 2.0 over WebSocket at `127.0.0.1:7600`.
 | `ping` | none | `{status}` |
 | `create` | `{command, args?, rows?, cols?}` | `{id}` |
 | `screenshot` | `{id, format?, scrollback?}` | `{rows, cols, hash, lines?, history?, changes?, cursor, elements?, state?}` |
-| `detect` | `{id}` | `{elements}` |
+| `detect` | `{id, format?}` | `{elements}` or `{elements, tree, viewport, scrolled}` |
 | `input` | `{id, data}` | `null` |
 | `resize` | `{id, rows, cols}` | `null` |
 | `mouse_click` | `{id, row, col, button?}` | `null` |

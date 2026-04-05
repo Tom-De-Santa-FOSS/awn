@@ -9,7 +9,7 @@ JSON-RPC 2.0 over WebSocket at `127.0.0.1:7600`.
 | `ping` | none | `{status}` |
 | `create` | `{command, args?, rows?, cols?}` | `{id}` |
 | `screenshot` | `{id, format?, scrollback?}` | `{rows, cols, hash, lines?, history?, changes?, cursor, elements?, state?}` |
-| `detect` | `{id}` | `{elements}` |
+| `detect` | `{id, format?}` | `{elements}` or `{elements, tree, viewport, scrolled}` |
 | `input` | `{id, data}` | `null` |
 | `resize` | `{id, rows, cols}` | `null` |
 | `mouse_click` | `{id, row, col, button?}` | `null` |
@@ -31,6 +31,26 @@ The `format` parameter controls what the screenshot response includes:
 | `full` | yes | yes | yes | no |
 | `structured` | no | yes | yes | no |
 | `diff` | no | no | yes | yes (with `base_hash`) |
+
+## Detect
+
+`detect` supports two modes:
+
+- default / `flat` — backward-compatible flat element list
+- `structured` — richer semantic output intended for agents and higher-level tooling
+
+Structured detect returns:
+
+- `elements` — flattened semantic element list with `id`, `ref`, `role`, `description`, bounds, and state flags
+- `tree` — hierarchical nesting of the same semantic elements
+- `viewport` — current visible terminal rectangle
+- `scrolled` — whether scroll indicators were detected
+
+Example request:
+
+```json
+{"id":"sess-123","format":"structured"}
+```
 
 ## Exec
 
@@ -65,4 +85,3 @@ Set `stop_on_error` to halt the pipeline on the first failing step.
 ## Authentication
 
 Set `AWN_TOKEN` on both daemon and client to enable Bearer token auth. All WebSocket requests must include the token in the `Authorization` header.
-

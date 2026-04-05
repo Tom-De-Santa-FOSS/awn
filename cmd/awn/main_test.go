@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -485,9 +487,9 @@ func TestRun_ScreenshotFullFlag_RequestsFullFormat(t *testing.T) {
 	}
 }
 
-func TestRun_DetectStructuredFlag_RequestsStructuredFormat(t *testing.T) {
+func TestRun_DetectVerboseFlag_ShowsFullStructured(t *testing.T) {
 	var gotParams map[string]any
-	stdout, err := run([]string{"detect", "sess-123", "--structured"}, func(_ string, method string, params any) (string, error) {
+	stdout, err := run([]string{"detect", "sess-123", "--verbose"}, func(_ string, method string, params any) (string, error) {
 		if method != "detect" {
 			t.Fatalf("method = %q, want detect", method)
 		}
@@ -507,7 +509,7 @@ func TestRun_DetectStructuredFlag_RequestsStructuredFormat(t *testing.T) {
 		t.Fatalf("format = %#v, want structured", gotParams["format"])
 	}
 	if !strings.Contains(stdout, "@button[1] [button] \"Save\"") {
-		t.Fatalf("stdout = %q, want structured detect text", stdout)
+		t.Fatalf("stdout = %q, want verbose structured detect text", stdout)
 	}
 	if !strings.Contains(stdout, "focused") {
 		t.Fatalf("stdout = %q, want focused marker", stdout)
@@ -523,5 +525,450 @@ func TestRun_DetectStructuredFlag_WithJSON_PrintsRawJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"button[1]"`) {
 		t.Fatalf("stdout = %q, want raw JSON", stdout)
+	}
+}
+
+// --- Current session tests ---
+
+func TestRun_CreateCommand_SetsCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	opts := &runOpts{caller: func(_ string, method string, _ any) (string, error) {
+		return `{"id":"abc12345"}`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"create", "bash"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(stateDir, "current"))
+	if err != nil {
+		t.Fatalf("read current: %v", err)
+	}
+	if string(data) != "abc12345" {
+		t.Fatalf("current = %q, want %q", string(data), "abc12345")
+	}
+}
+
+func TestRun_ScreenshotCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"rows":24,"cols":80,"lines":["$ "]}`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"screenshot"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+func TestRun_DetectCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"elements":[]}`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"detect"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+func TestRun_CloseCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"close"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+func TestRun_CloseCommand_ClearsCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	opts := &runOpts{caller: func(_ string, _ string, _ any) (string, error) {
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"close"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	_, err = os.ReadFile(filepath.Join(stateDir, "current"))
+	if !os.IsNotExist(err) {
+		t.Fatalf("current file should be removed after close, err = %v", err)
+	}
+}
+
+func TestRun_ExplicitID_OverridesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("current-sess"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"rows":24,"cols":80,"lines":["$ "]}`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"screenshot", "--session", "explicit-sess"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "explicit-sess" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "explicit-sess")
+	}
+}
+
+func TestRun_NoCurrentSession_ErrorsWithoutID(t *testing.T) {
+	stateDir := t.TempDir()
+	opts := &runOpts{caller: func(_ string, _ string, _ any) (string, error) {
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"screenshot"}, opts)
+	if err == nil {
+		t.Fatal("expected error when no current session and no ID")
+	}
+	if !strings.Contains(err.Error(), "no current session") {
+		t.Fatalf("error = %q, want 'no current session'", err.Error())
+	}
+}
+
+func TestRun_PressCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"press", "Enter"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+func TestRun_TypeCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"type", "hello"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+func TestRun_WaitCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `null`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"wait", "--text", "ready"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
+	}
+}
+
+// --- Command alias tests ---
+
+func TestRun_OpenCommand_IsAliasForCreate(t *testing.T) {
+	var gotMethod string
+	var gotParams map[string]any
+
+	stdout, err := run([]string{"open", "bash"}, func(_ string, method string, params any) (string, error) {
+		gotMethod = method
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"id":"abc12345"}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotMethod != "create" {
+		t.Fatalf("method = %q, want %q", gotMethod, "create")
+	}
+	if gotParams["command"] != "bash" {
+		t.Fatalf("command = %v, want %q", gotParams["command"], "bash")
+	}
+	if stdout == "" {
+		t.Fatal("expected output")
+	}
+}
+
+func TestRun_ShowCommand_IsAliasForScreenshot(t *testing.T) {
+	var gotMethod string
+	var gotParams map[string]any
+
+	stdout, err := run([]string{"show", "sess-1"}, func(_ string, method string, params any) (string, error) {
+		gotMethod = method
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"rows":24,"cols":80,"lines":["$ "]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotMethod != "screenshot" {
+		t.Fatalf("method = %q, want %q", gotMethod, "screenshot")
+	}
+	if gotParams["id"] != "sess-1" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "sess-1")
+	}
+	if !strings.Contains(stdout, "$ ") {
+		t.Fatalf("stdout = %q, want screen lines", stdout)
+	}
+}
+
+func TestRun_InspectCommand_IsAliasForDetect(t *testing.T) {
+	var gotMethod string
+	var gotParams map[string]any
+
+	_, err := run([]string{"inspect", "sess-1"}, func(_ string, method string, params any) (string, error) {
+		gotMethod = method
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"elements":[]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotMethod != "detect" {
+		t.Fatalf("method = %q, want %q", gotMethod, "detect")
+	}
+	if gotParams["id"] != "sess-1" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "sess-1")
+	}
+}
+
+// --- Human-friendly detect rendering tests ---
+
+func TestRun_DetectCommand_DefaultsToHumanReadable(t *testing.T) {
+	// Without --json, detect should output human-readable text (not raw JSON)
+	stdout, err := run([]string{"detect", "sess-1"}, func(_ string, _ string, params any) (string, error) {
+		// Server returns structured data
+		return `{"elements":[{"type":"button","label":"Save","ref":"button[1]","role":"button","description":"","bounds":{"row":1,"col":2,"width":6,"height":1},"focused":true}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Should NOT be raw JSON
+	if strings.HasPrefix(strings.TrimSpace(stdout), "{") {
+		t.Fatalf("default detect output should be human-readable, got JSON: %q", stdout)
+	}
+	// Should contain the label
+	if !strings.Contains(stdout, "Save") {
+		t.Fatalf("stdout = %q, want label 'Save'", stdout)
+	}
+}
+
+func TestRun_DetectCommand_HumanReadableHidesCoordinates(t *testing.T) {
+	stdout, err := run([]string{"detect", "sess-1"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"elements":[{"type":"button","label":"OK","ref":"button[1]","role":"button","bounds":{"row":5,"col":10,"width":4,"height":1},"focused":false}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Human-readable should NOT show coordinates by default
+	if strings.Contains(stdout, "@5,10") || strings.Contains(stdout, "5,10") {
+		t.Fatalf("human-readable detect should hide coordinates, got %q", stdout)
+	}
+}
+
+func TestRun_DetectCommand_HumanReadableHidesRefs(t *testing.T) {
+	stdout, err := run([]string{"detect", "sess-1"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"elements":[{"type":"button","label":"OK","ref":"button[1]","role":"button","bounds":{"row":5,"col":10,"width":4,"height":1},"focused":false}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Human-readable should NOT show refs by default
+	if strings.Contains(stdout, "button[1]") {
+		t.Fatalf("human-readable detect should hide refs, got %q", stdout)
+	}
+}
+
+func TestRun_DetectCommand_HumanReadableShowsFocused(t *testing.T) {
+	stdout, err := run([]string{"detect", "sess-1"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"elements":[{"type":"input","label":"Search","ref":"input[1]","role":"textbox","bounds":{"row":0,"col":0,"width":20,"height":1},"focused":true}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, "focused") {
+		t.Fatalf("human-readable detect should show focused marker, got %q", stdout)
+	}
+}
+
+func TestRun_DetectCommand_JSONFlagReturnsRawJSON(t *testing.T) {
+	stdout, err := run([]string{"--json", "detect", "sess-1"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"elements":[{"type":"button","label":"OK","ref":"button[1]"}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// --json should return raw JSON
+	if !strings.Contains(stdout, `"ref"`) {
+		t.Fatalf("--json should return raw JSON, got %q", stdout)
+	}
+}
+
+func TestRun_DetectCommand_StructuredFlagRequestsStructured(t *testing.T) {
+	var gotParams map[string]any
+	_, err := run([]string{"detect", "sess-1", "--structured"}, func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"elements":[{"type":"button","label":"OK","ref":"button[1]","role":"button","bounds":{"row":0,"col":0,"width":4,"height":1},"focused":false}]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["format"] != "structured" {
+		t.Fatalf("format = %v, want structured", gotParams["format"])
+	}
+}
+
+// --- Human-friendly list output tests ---
+
+func TestRun_ListCommand_HumanReadableByDefault(t *testing.T) {
+	stdout, err := run([]string{"list"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"sessions":["abc12345","def67890"]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Should NOT be raw JSON
+	if strings.HasPrefix(strings.TrimSpace(stdout), "{") {
+		t.Fatalf("default list output should be human-readable, got JSON: %q", stdout)
+	}
+	// Should contain session IDs
+	if !strings.Contains(stdout, "abc12345") {
+		t.Fatalf("stdout = %q, want session abc12345", stdout)
+	}
+	if !strings.Contains(stdout, "def67890") {
+		t.Fatalf("stdout = %q, want session def67890", stdout)
+	}
+}
+
+func TestRun_ListCommand_ShowsCurrentMarker(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	opts := &runOpts{caller: func(_ string, _ string, _ any) (string, error) {
+		return `{"sessions":["abc12345","def67890"]}`, nil
+	}, stateDir: stateDir}
+
+	stdout, err := runWithOpts([]string{"list"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Current session should have a marker
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	foundCurrent := false
+	for _, line := range lines {
+		if strings.Contains(line, "abc12345") && strings.Contains(line, "*") {
+			foundCurrent = true
+		}
+	}
+	if !foundCurrent {
+		t.Fatalf("stdout = %q, want current session marker (*) on abc12345", stdout)
+	}
+}
+
+func TestRun_ListCommand_EmptyShowsMessage(t *testing.T) {
+	stdout, err := run([]string{"list"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"sessions":[]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, "no sessions") {
+		t.Fatalf("stdout = %q, want 'no sessions' message", stdout)
+	}
+}
+
+func TestRun_ListCommand_JSONFlagReturnsRawJSON(t *testing.T) {
+	stdout, err := run([]string{"--json", "list"}, func(_ string, _ string, _ any) (string, error) {
+		return `{"sessions":["abc12345"]}`, nil
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, `"sessions"`) {
+		t.Fatalf("--json should return raw JSON, got %q", stdout)
+	}
+}
+
+func TestRun_ExecCommand_UsesCurrentSession(t *testing.T) {
+	stateDir := t.TempDir()
+	os.WriteFile(filepath.Join(stateDir, "current"), []byte("abc12345"), 0o644)
+
+	var gotParams map[string]any
+	opts := &runOpts{caller: func(_ string, _ string, params any) (string, error) {
+		data, _ := json.Marshal(params)
+		json.Unmarshal(data, &gotParams)
+		return `{"screen":{"rows":24,"cols":80,"lines":["$ "]}}`, nil
+	}, stateDir: stateDir}
+
+	_, err := runWithOpts([]string{"exec", "ls"}, opts)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if gotParams["id"] != "abc12345" {
+		t.Fatalf("id = %v, want %q", gotParams["id"], "abc12345")
 	}
 }

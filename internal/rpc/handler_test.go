@@ -15,11 +15,40 @@ import (
 	"github.com/tom/awn"
 )
 
-
 // stubStrategy is a no-op strategy for handler tests.
 type stubStrategy struct{}
 
 func (stubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
+
+type structuredStubStrategy struct{}
+
+func (structuredStubStrategy) Detect(screen *awn.Screen) []awn.Element { return nil }
+
+func (structuredStubStrategy) DetectStructured(screen *awn.Screen) *awn.DetectResult {
+	return &awn.DetectResult{
+		Elements: []awn.DetectElement{{
+			ID:          1,
+			Type:        "button",
+			Label:       "Save",
+			Description: `button "Save" focused`,
+			Focused:     true,
+			Role:        "button",
+			Ref:         "button[1]",
+			Bounds:      awn.Rect{Row: 1, Col: 2, Width: 6, Height: 1},
+		}},
+		Tree: []awn.DetectTreeNode{{
+			ID:          1,
+			Type:        "button",
+			Label:       "Save",
+			Description: `button "Save" focused`,
+			Focused:     true,
+			Role:        "button",
+			Ref:         "button[1]",
+			Bounds:      awn.Rect{Row: 1, Col: 2, Width: 6, Height: 1},
+		}},
+		Viewport: awn.Rect{Row: 0, Col: 0, Width: 80, Height: 24},
+	}
+}
 
 func newTestHandler() *Handler {
 	d := awn.NewDriver()
@@ -124,6 +153,38 @@ func TestDispatch_MethodNotFound_ForNonexistentSession(t *testing.T) {
 				t.Fatalf("expected %s params to be accepted, got: %v", tt.method, err)
 			}
 		})
+	}
+}
+
+func TestDispatch_Detect_StructuredFormat_ReturnsStructuredElementsAndTree(t *testing.T) {
+	h := NewHandler(awn.NewDriver(), structuredStubStrategy{})
+	result, err := h.Dispatch("detect", json.RawMessage(`{"id":"nonexistent","format":"structured"}`))
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected session not found error, got: %v", err)
+	}
+
+	_ = result
+
+	p := &pipePTY{}
+	d := awn.NewDriver(awn.WithPTY(p))
+	h = NewHandler(d, structuredStubStrategy{})
+	s, err := d.Session("true")
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+
+	resp, err := h.Detect(DetectRequest{ID: s.ID, Format: "structured"})
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(resp.Elements) != 1 || resp.Elements[0].Ref != "button[1]" {
+		t.Fatalf("structured detect elements = %#v", resp.Elements)
+	}
+	if len(resp.Tree) != 1 || resp.Tree[0].Description == "" {
+		t.Fatalf("structured detect tree = %#v", resp.Tree)
+	}
+	if resp.Viewport.Width != 80 || resp.Viewport.Height != 24 {
+		t.Fatalf("viewport = %#v", resp.Viewport)
 	}
 }
 

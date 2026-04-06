@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="awn-logo.png" alt="awn logo" width="200" />
+  <img src="logo.png" alt="awn logo" width="200" />
 </p>
 
 # awn

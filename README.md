@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="logo.png" alt="awn logo" width="200" />
-</p>
-
 # awn
 
 TUI automation for AI agents. Manage headless terminal sessions — screenshot, send input, detect UI elements, and wait on terminal state.

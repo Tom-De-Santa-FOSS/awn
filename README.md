@@ -1,3 +1,5 @@
+# ABANDONED PROJECT - SEE VIRTUI "https://github.com/honeybadge-labs/virtui"
+
 # awn
 
 TUI automation for AI agents. Manage headless terminal sessions — screenshot, send input, detect UI elements, and wait on terminal state.
